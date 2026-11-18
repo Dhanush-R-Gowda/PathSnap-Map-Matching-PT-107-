@@ -1,3 +1,4 @@
+
 """Data loaders for .track, .nodes, .arcs, and .route files."""
 
 import os
@@ -28,28 +29,42 @@ def load_track(trip_dir):
 
     rows = []
     prev_ts = None
+
     with open(path, "r") as fh:
         for lineno, line in enumerate(fh, 1):
             line = line.strip()
+
             if not line:
                 continue
+
             parts = line.split()
+
             if len(parts) < 3:
-                warnings.warn(f"{path}:{lineno}: expected 3 columns, got {len(parts)}")
+                warnings.warn(
+                    f"{path}:{lineno}: expected 3 columns, got {len(parts)}"
+                )
                 continue
+
             try:
-                lon, lat, ts = float(parts[0]), float(parts[1]), float(parts[2])
+                lon, lat, ts = (
+                    float(parts[0]),
+                    float(parts[1]),
+                    float(parts[2]),
+                )
             except ValueError as exc:
                 warnings.warn(f"{path}:{lineno}: parse error — {exc}")
                 continue
 
             if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
-                warnings.warn(f"{path}:{lineno}: implausible coords ({lon}, {lat})")
+                warnings.warn(
+                    f"{path}:{lineno}: implausible coords ({lon}, {lat})"
+                )
 
             if prev_ts is not None and ts < prev_ts:
                 warnings.warn(
                     f"{path}:{lineno}: non-monotone timestamp {ts} < {prev_ts}"
                 )
+
             prev_ts = ts
             rows.append((lon, lat, ts))
 
@@ -77,15 +92,22 @@ def load_nodes(trip_dir):
         raise FileNotFoundError(f"Nodes file not found: {path}")
 
     rows = []
+
     with open(path, "r") as fh:
         for lineno, line in enumerate(fh, 1):
             line = line.strip()
+
             if not line:
                 continue
+
             parts = line.split()
+
             if len(parts) < 2:
-                warnings.warn(f"{path}:{lineno}: expected 2 columns, got {len(parts)}")
+                warnings.warn(
+                    f"{path}:{lineno}: expected 2 columns, got {len(parts)}"
+                )
                 continue
+
             try:
                 lon, lat = float(parts[0]), float(parts[1])
             except ValueError as exc:
@@ -93,7 +115,9 @@ def load_nodes(trip_dir):
                 continue
 
             if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
-                warnings.warn(f"{path}:{lineno}: implausible coords ({lon}, {lat})")
+                warnings.warn(
+                    f"{path}:{lineno}: implausible coords ({lon}, {lat})"
+                )
 
             rows.append((lon, lat))
 
@@ -121,20 +145,28 @@ def load_arcs(trip_dir):
         raise FileNotFoundError(f"Arcs file not found: {path}")
 
     rows = []
+
     with open(path, "r") as fh:
         for lineno, line in enumerate(fh, 1):
             line = line.strip()
+
             if not line:
                 continue
+
             parts = line.split()
+
             if len(parts) < 2:
-                warnings.warn(f"{path}:{lineno}: expected 2 columns, got {len(parts)}")
+                warnings.warn(
+                    f"{path}:{lineno}: expected 2 columns, got {len(parts)}"
+                )
                 continue
+
             try:
                 from_id, to_id = int(parts[0]), int(parts[1])
             except ValueError as exc:
                 warnings.warn(f"{path}:{lineno}: parse error — {exc}")
                 continue
+
             rows.append((from_id, to_id))
 
     if not rows:
@@ -161,16 +193,20 @@ def load_route(trip_dir):
         raise FileNotFoundError(f"Route file not found: {path}")
 
     rows = []
+
     with open(path, "r") as fh:
         for lineno, line in enumerate(fh, 1):
             line = line.strip()
+
             if not line:
                 continue
+
             try:
                 arc_id = int(line)
             except ValueError as exc:
                 warnings.warn(f"{path}:{lineno}: parse error — {exc}")
                 continue
+
             rows.append(arc_id)
 
     if not rows:
@@ -198,6 +234,24 @@ def load_trip(trip_dir):
     }
 
 
+def load_trip_for_inference(trip_dir):
+    """Load only .track, .nodes and .arcs (never the ground-truth .route).
+
+    Parameters
+    ----------
+    trip_dir : str
+
+    Returns
+    -------
+    dict with keys: track, nodes, arcs
+    """
+    return {
+        "track": load_track(trip_dir),
+        "nodes": load_nodes(trip_dir),
+        "arcs": load_arcs(trip_dir),
+    }
+
+
 def discover_trips(partition_dir):
     """Discover all trip subdirectories in a partition.
 
@@ -210,11 +264,15 @@ def discover_trips(partition_dir):
     sorted list of trip_id strings (8-digit zero-padded)
     """
     if not os.path.isdir(partition_dir):
-        raise NotADirectoryError(f"Partition directory not found: {partition_dir}")
+        raise NotADirectoryError(
+            f"Partition directory not found: {partition_dir}"
+        )
 
     trip_ids = []
+
     for name in os.listdir(partition_dir):
         full_path = os.path.join(partition_dir, name)
+
         if os.path.isdir(full_path) and name.isdigit() and len(name) == 8:
             trip_ids.append(name)
 

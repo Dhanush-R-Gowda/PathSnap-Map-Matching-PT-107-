@@ -1,15 +1,26 @@
+
 """Phase 1 feature engineering: build candidate-level feature DataFrames."""
 
 import os
-import sys
 import math
 import warnings
+
 import numpy as np
 import pandas as pd
 
-from src.data.loader import load_arcs, load_nodes, load_route, load_track, discover_trips
+from src.data.loader import (
+    load_arcs,
+    load_nodes,
+    load_route,
+    load_track,
+    discover_trips,
+)
 from src.utils.geometry import (
-    build_projection, project, arc_length, bearing, wrap_angle
+    build_projection,
+    project,
+    arc_length,
+    bearing,
+    wrap_angle,
 )
 from src.data.candidates import build_spatial_index, get_candidates
 from src.data.alignment import align_observations
@@ -20,16 +31,14 @@ from src.data.alignment import align_observations
 # ---------------------------------------------------------------------------
 
 def _build_degree_maps(arcs):
-    """Return (out_degree, in_degree) dicts keyed by node_id.
-
-    out_degree[node] = number of arcs whose from_node == node
-    in_degree[node]  = number of arcs whose to_node == node
-    """
+    """Return out-degree and in-degree dictionaries keyed by node ID."""
     out_deg = {}
     in_deg = {}
+
     for from_id, to_id in arcs:
         out_deg[from_id] = out_deg.get(from_id, 0) + 1
         in_deg[to_id] = in_deg.get(to_id, 0) + 1
+
     return out_deg, in_deg
 
 
@@ -37,136 +46,261 @@ def _build_degree_maps(arcs):
 # Single-trip pipeline
 # ---------------------------------------------------------------------------
 
-def build_trip_features(trip_id, trip_dir, radius=50.0, include_labels=True):
-    """Run the full Phase 1 pipeline for one trip and return a feature DataFrame.
-
-    Parameters
-    ----------
-    trip_id  : str — 8-digit zero-padded trip ID
-    trip_dir : str — full path to the trip subdirectory
-    radius   : float — candidate search radius in metres
-
-    Returns
-    -------
-    pd.DataFrame with the Phase 1 schema (see specification)
+def build_trip_features(
+    trip_id,
+    trip_dir,
+    radius=50.0,
+    include_labels=True,
+):
     """
-    # Inference deliberately loads no .route file. Keep labels on the training
-    # path only so evaluator data cannot leak into candidate features.
+    Build candidate-level features for one trip.
+
+    Training mode:
+        Loads the ground-truth .route file and generates labels.
+
+    Inference mode:
+        Does not load the .route file and does not generate labels.
+    """
     track = load_track(trip_dir)
     nodes = load_nodes(trip_dir)
     arcs = load_arcs(trip_dir)
+
     route = load_route(trip_dir) if include_labels else None
 
+    return _build_features_core(
+        trip_id,
+        track,
+        nodes,
+        arcs,
+        radius,
+        route=route,
+        include_labels=include_labels,
+    )
+
+
+def build_trip_features_inference(
+    trip_id,
+    track,
+    nodes,
+    arcs,
+    radius=50.0,
+):
+    """
+    Generate candidate features for inference without ground-truth labels.
+
+    Returns the same model-input features as training, but omits:
+        label
+        is_gt_in_candidates
+    """
+    return _build_features_core(
+        trip_id,
+        track,
+        nodes,
+        arcs,
+        radius,
+        route=None,
+        include_labels=False,
+    )
+
+
+def _build_features_core(
+    trip_id,
+    track,
+    nodes,
+    arcs,
+    radius,
+    route=None,
+    include_labels=True,
+):
+    """Shared feature-generation implementation."""
+
     N = len(track)
+
     if not N:
-        raise ValueError(f"Trip {trip_id} has no valid GPS observations")
+        raise ValueError(
+            f"Trip {trip_id} has no valid GPS observations"
+        )
+
     if not nodes or not arcs:
-        raise ValueError(f"Trip {trip_id} must contain road nodes and arcs")
+        raise ValueError(
+            f"Trip {trip_id} must contain road nodes and arcs"
+        )
+
     for arc_id, (from_id, to_id) in enumerate(arcs):
-        if from_id < 0 or to_id < 0 or from_id >= len(nodes) or to_id >= len(nodes):
-            raise ValueError(f"Trip {trip_id} arc {arc_id} references a missing node")
+        if (
+            from_id < 0
+            or to_id < 0
+            or from_id >= len(nodes)
+            or to_id >= len(nodes)
+        ):
+            raise ValueError(
+                f"Trip {trip_id} arc {arc_id} references a missing node"
+            )
+
+    if include_labels and route is None:
+        raise ValueError(
+            f"Trip {trip_id} requires ground-truth route data for training"
+        )
 
     proj = build_projection(track)
 
-    # --- Spatial index ---
-    tree, midpoints_array, arc_ids_array, max_arc_half_length = build_spatial_index(
-        nodes, arcs, proj
-    )
+    # -----------------------------------------------------------------------
+    # Spatial index
+    # -----------------------------------------------------------------------
 
-    # --- Candidate generation ---
-    # candidates_per_obs[i] = list of (arc_id, snap_dist, snap_t)
+    (
+        tree,
+        midpoints_array,
+        arc_ids_array,
+        max_arc_half_length,
+    ) = build_spatial_index(nodes, arcs, proj)
+
+    # -----------------------------------------------------------------------
+    # Candidate generation
+    # -----------------------------------------------------------------------
+
     candidates_per_obs = []
-    for lon, lat, _ts in track:
-        cands = get_candidates(
-            lon, lat, proj, tree, nodes, arcs, arc_ids_array,
-            max_arc_half_length, radius=radius
-        )
-        candidates_per_obs.append(cands)
 
-    # --- Label alignment ---
+    for lon, lat, _ts in track:
+        candidates = get_candidates(
+            lon,
+            lat,
+            proj,
+            tree,
+            nodes,
+            arcs,
+            arc_ids_array,
+            max_arc_half_length,
+            radius=radius,
+        )
+
+        candidates_per_obs.append(candidates)
+
+    # -----------------------------------------------------------------------
+    # Ground-truth label alignment
+    # -----------------------------------------------------------------------
+
     if include_labels:
         _obs_to_route_pos, obs_to_arc = align_observations(
-            track, nodes, arcs, route, proj
+            track,
+            nodes,
+            arcs,
+            route,
+            proj,
         )
     else:
         obs_to_arc = None
 
-    # --- Degree maps ---
+    # -----------------------------------------------------------------------
+    # Degree maps
+    # -----------------------------------------------------------------------
+
     out_deg, in_deg = _build_degree_maps(arcs)
 
-    # --- Arc lengths and bearings (cached) ---
+    # -----------------------------------------------------------------------
+    # Arc lengths and bearings (cached)
+    # -----------------------------------------------------------------------
+
     arc_len_cache = {}
     arc_bearing_cache = {}
 
     def get_arc_len(arc_id):
         if arc_id not in arc_len_cache:
             from_id, to_id = arcs[arc_id]
-            arc_len_cache[arc_id] = arc_length(nodes, from_id, to_id, proj)
+            arc_len_cache[arc_id] = arc_length(
+                nodes,
+                from_id,
+                to_id,
+                proj,
+            )
+
         return arc_len_cache[arc_id]
 
     def get_arc_bearing(arc_id):
         if arc_id not in arc_bearing_cache:
             from_id, to_id = arcs[arc_id]
+
             lon_a, lat_a = nodes[from_id]
             lon_b, lat_b = nodes[to_id]
+
             ax, ay = project(lon_a, lat_a, proj)
             bx, by = project(lon_b, lat_b, proj)
-            arc_bearing_cache[arc_id] = bearing(ax, ay, bx, by)
+
+            arc_bearing_cache[arc_id] = bearing(
+                ax,
+                ay,
+                bx,
+                by,
+            )
+
         return arc_bearing_cache[arc_id]
 
-    # --- GPS kinematics ---
-    # dt_prev_s[i], dt_next_s[i], heading_reliable[i], gps_speed, gps_heading
+    # -----------------------------------------------------------------------
+    # GPS kinematics
+    # -----------------------------------------------------------------------
+
     timestamps = np.array([ts for _, _, ts in track])
+
     dt_prev = np.zeros(N, dtype=np.float32)
     dt_next = np.zeros(N, dtype=np.float32)
 
     if N > 1:
-        dt_prev[1:] = (timestamps[1:] - timestamps[:-1]).astype(np.float32)
-        dt_next[:-1] = dt_prev[1:]  # dt_next[i] = dt_prev[i+1]
-        # Last obs: dt_next = 0.0 (already)
+        dt_prev[1:] = (
+            timestamps[1:] - timestamps[:-1]
+        ).astype(np.float32)
+
+        dt_next[:-1] = dt_prev[1:]
 
     heading_reliable = np.zeros(N, dtype=np.int8)
     gps_speed = np.zeros(N, dtype=np.float32)
     gps_heading = np.zeros(N, dtype=np.float32)
 
     for i in range(1, N):
-        if dt_prev[i] < 5.0 and dt_prev[i] > 0.0:
+        if 0.0 < dt_prev[i] < 5.0:
             heading_reliable[i] = 1
+
             lon0, lat0, _ = track[i - 1]
             lon1, lat1, _ = track[i]
+
             x0, y0 = project(lon0, lat0, proj)
             x1, y1 = project(lon1, lat1, proj)
+
             dist_m = math.hypot(x1 - x0, y1 - y0)
             hdg = bearing(x0, y0, x1, y1)
+
             gps_speed[i] = dist_m / float(dt_prev[i])
             gps_heading[i] = hdg
 
     is_gap_prev = (dt_prev >= 5.0).astype(np.int8)
     is_gap_next = (dt_next >= 5.0).astype(np.int8)
-    # obs 0: dt_prev=0 so not a gap, is_gap_prev[0]=0 (correct)
 
-    # --- Build rows ---
+    # -----------------------------------------------------------------------
+    # Build candidate feature rows
+    # -----------------------------------------------------------------------
+
     rows = []
-    miss_obs = []
 
     for i in range(N):
         gt_arc = int(obs_to_arc[i]) if include_labels else None
-        cands = candidates_per_obs[i]
+        candidates = candidates_per_obs[i]
 
         if include_labels:
-            # Is GT arc in candidates?
-            cand_arc_ids = {c[0] for c in cands}
-            gt_in_cands = gt_arc in cand_arc_ids
-            if not gt_in_cands:
-                miss_obs.append(i)
+            candidate_arc_ids = {
+                candidate[0] for candidate in candidates
+            }
 
-        for arc_id, snap_dist, snap_t in cands:
+            gt_in_candidates = gt_arc in candidate_arc_ids
+
+        for arc_id, snap_dist, snap_t in candidates:
             from_id, to_id = arcs[arc_id]
+
             a_len = get_arc_len(arc_id)
             a_bearing = get_arc_bearing(arc_id)
 
             if heading_reliable[i]:
-                bdiff = wrap_angle(a_bearing - float(gps_heading[i]))
+                bdiff = wrap_angle(
+                    a_bearing - float(gps_heading[i])
+                )
                 abs_bdiff = abs(bdiff)
             else:
                 bdiff = 0.0
@@ -194,16 +328,26 @@ def build_trip_features(trip_id, trip_dir, radius=50.0, include_labels=True):
                 "is_gap_next": np.int8(is_gap_next[i]),
                 "heading_reliable": np.int8(heading_reliable[i]),
             }
+
             if include_labels:
                 row["label"] = np.int8(arc_id == gt_arc)
-                row["is_gt_in_candidates"] = gt_in_cands
+                row["is_gt_in_candidates"] = bool(gt_in_candidates)
+
             rows.append(row)
 
+    # -----------------------------------------------------------------------
+    # Empty result handling
+    # -----------------------------------------------------------------------
+
     if not rows:
-        # Return empty DataFrame with correct schema
         return _empty_schema_df(include_labels=include_labels)
 
+    # -----------------------------------------------------------------------
+    # DataFrame construction and type conversion
+    # -----------------------------------------------------------------------
+
     df = pd.DataFrame(rows)
+
     dtypes = {
         "trip_id": "object",
         "obs_index": "int32",
@@ -223,27 +367,67 @@ def build_trip_features(trip_id, trip_dir, radius=50.0, include_labels=True):
         "is_gap_next": "int8",
         "heading_reliable": "int8",
     }
+
     if include_labels:
-        dtypes.update({"label": "int8", "is_gt_in_candidates": "bool"})
+        dtypes.update({
+            "label": "int8",
+            "is_gt_in_candidates": "bool",
+        })
+
     df = df.astype(dtypes)
 
     return df
 
 
-def build_trip_inference_features(trip_id, trip_dir, radius=50.0):
-    """Generate model-ready candidates without reading or producing labels."""
-    return build_trip_features(trip_id, trip_dir, radius=radius, include_labels=False)
+# ---------------------------------------------------------------------------
+# Trip-level inference helper
+# ---------------------------------------------------------------------------
 
+def build_trip_inference_features(
+    trip_id,
+    trip_dir,
+    radius=50.0,
+):
+    """
+    Generate model-ready candidates from a trip directory.
+
+    Does not read the ground-truth .route file.
+    """
+    return build_trip_features(
+        trip_id,
+        trip_dir,
+        radius=radius,
+        include_labels=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Empty DataFrame schemas
+# ---------------------------------------------------------------------------
 
 def _empty_schema_df(include_labels=True):
     """Return an empty DataFrame with the correct Phase 1 schema."""
+
     columns = [
-        "trip_id", "obs_index", "arc_id", "snap_distance_m", "snap_t",
-        "arc_length_m", "bearing_diff_rad", "abs_bearing_diff_rad",
-        "gps_speed_mps", "gps_heading_rad", "dt_prev_s", "dt_next_s",
-        "out_degree", "in_degree", "is_gap_prev", "is_gap_next",
+        "trip_id",
+        "obs_index",
+        "arc_id",
+        "snap_distance_m",
+        "snap_t",
+        "arc_length_m",
+        "bearing_diff_rad",
+        "abs_bearing_diff_rad",
+        "gps_speed_mps",
+        "gps_heading_rad",
+        "dt_prev_s",
+        "dt_next_s",
+        "out_degree",
+        "in_degree",
+        "is_gap_prev",
+        "is_gap_next",
         "heading_reliable",
     ]
+
     dtypes = {
         "trip_id": "object",
         "obs_index": "int32",
@@ -263,46 +447,79 @@ def _empty_schema_df(include_labels=True):
         "is_gap_next": "int8",
         "heading_reliable": "int8",
     }
+
     if include_labels:
-        columns.extend(["label", "is_gt_in_candidates"])
-        dtypes.update({"label": "int8", "is_gt_in_candidates": "bool"})
+        columns.extend([
+            "label",
+            "is_gt_in_candidates",
+        ])
+
+        dtypes.update({
+            "label": "int8",
+            "is_gt_in_candidates": "bool",
+        })
+
     return pd.DataFrame(columns=columns).astype(dtypes)
+
+
+def _empty_inference_schema_df():
+    """Return an empty DataFrame with the inference schema."""
+
+    return _empty_schema_df(include_labels=False)
 
 
 # ---------------------------------------------------------------------------
 # Partition-level pipeline
 # ---------------------------------------------------------------------------
 
-def build_partition_features(partition_dir, output_path, radius=50.0):
-    """Process all trips in a partition and save features to parquet.
-
-    Parameters
-    ----------
-    partition_dir : str — path to train/ or student_test/ directory
-    output_path   : str — output parquet path
-    radius        : float — candidate search radius in metres
-
-    Returns
-    -------
-    dict with keys:
-      total_rows, num_trips, class_balance, overall_miss_rate,
-      trip_miss_rates (dict trip_id -> miss_rate float)
+def build_partition_features(
+    partition_dir,
+    output_path,
+    radius=50.0,
+):
     """
+    Process all trips in a partition and save features to Parquet.
+
+    Returns:
+        total_rows
+        num_trips
+        class_balance
+        overall_miss_rate
+        trip_miss_rates
+        trip_obs_counts
+        trip_miss_counts
+    """
+
     trip_ids = discover_trips(partition_dir)
+
     all_dfs = []
     trip_miss_rates = {}
     trip_obs_counts = {}
     trip_miss_counts = {}
+
     total_obs = 0
     total_misses = 0
 
     for trip_id in trip_ids:
         trip_dir = os.path.join(partition_dir, trip_id)
-        print(f"  Processing trip {trip_id} ...", flush=True)
+
+        print(
+            f"  Processing trip {trip_id} ...",
+            flush=True,
+        )
+
         try:
-            df = build_trip_features(trip_id, trip_dir, radius=radius)
+            df = build_trip_features(
+                trip_id,
+                trip_dir,
+                radius=radius,
+                include_labels=True,
+            )
+
         except Exception as exc:
-            warnings.warn(f"Trip {trip_id} failed: {exc}")
+            warnings.warn(
+                f"Trip {trip_id} failed: {exc}"
+            )
             continue
 
         if df.empty:
@@ -311,40 +528,80 @@ def build_partition_features(partition_dir, output_path, radius=50.0):
             trip_miss_counts[trip_id] = 0
             continue
 
-        # Per-trip miss stats
-        per_obs = df.groupby("obs_index")["is_gt_in_candidates"].first()
+        # Calculate candidate miss statistics per observation.
+        per_obs = (
+            df.groupby("obs_index")["is_gt_in_candidates"]
+            .first()
+        )
+
         n_obs = len(per_obs)
         n_miss = int((~per_obs).sum())
-        miss_rate = n_miss / n_obs if n_obs > 0 else 0.0
+
+        miss_rate = (
+            n_miss / n_obs
+            if n_obs > 0
+            else 0.0
+        )
+
         trip_miss_rates[trip_id] = miss_rate
         trip_obs_counts[trip_id] = n_obs
         trip_miss_counts[trip_id] = n_miss
+
         total_obs += n_obs
         total_misses += n_miss
 
         all_dfs.append(df)
+
         print(
-            f"    {len(df)} rows, {n_obs} obs, miss_rate={miss_rate:.3%}",
-            flush=True
+            f"    {len(df)} rows, {n_obs} obs, "
+            f"miss_rate={miss_rate:.3%}",
+            flush=True,
         )
 
-    if not all_dfs:
-        full_df = _empty_schema_df()
-    else:
-        full_df = pd.concat(all_dfs, ignore_index=True)
+    # -----------------------------------------------------------------------
+    # Combine and save results
+    # -----------------------------------------------------------------------
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    full_df.to_parquet(output_path, index=False)
-    print(f"\nSaved {len(full_df)} rows to {output_path}", flush=True)
+    if not all_dfs:
+        full_df = _empty_schema_df(include_labels=True)
+    else:
+        full_df = pd.concat(
+            all_dfs,
+            ignore_index=True,
+        )
+
+    output_dir = os.path.dirname(output_path)
+
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    full_df.to_parquet(
+        output_path,
+        index=False,
+    )
+
+    print(
+        f"\nSaved {len(full_df)} rows to {output_path}",
+        flush=True,
+    )
+
+    # -----------------------------------------------------------------------
+    # Summary statistics
+    # -----------------------------------------------------------------------
 
     total_rows = len(full_df)
+
     if total_rows > 0:
         n_pos = int((full_df["label"] == 1).sum())
         class_balance = n_pos / total_rows
     else:
         class_balance = 0.0
 
-    overall_miss_rate = total_misses / total_obs if total_obs > 0 else 0.0
+    overall_miss_rate = (
+        total_misses / total_obs
+        if total_obs > 0
+        else 0.0
+    )
 
     return {
         "total_rows": total_rows,
@@ -364,44 +621,115 @@ def build_partition_features(partition_dir, output_path, radius=50.0):
 if __name__ == "__main__":
     import argparse
 
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)
-    )))
-
-    parser = argparse.ArgumentParser(description="Build Phase 1 candidate features")
-    parser.add_argument(
-        "--partition", choices=["train", "student_test", "both"], default="both"
+    repo_root = os.path.dirname(
+        os.path.dirname(
+            os.path.dirname(
+                os.path.abspath(__file__)
+            )
+        )
     )
-    parser.add_argument("--radius", type=float, default=50.0)
+
+    parser = argparse.ArgumentParser(
+        description="Build Phase 1 candidate features"
+    )
+
+    parser.add_argument(
+        "--partition",
+        choices=["train", "student_test", "both"],
+        default="both",
+    )
+
+    parser.add_argument(
+        "--radius",
+        type=float,
+        default=50.0,
+    )
+
     args = parser.parse_args()
 
-    raw_root = os.path.join(repo_root, "data", "raw", "Student folder")
-    processed_root = os.path.join(repo_root, "data", "processed")
-    results_root = os.path.join(repo_root, "results", "experiments")
+    raw_root = os.path.join(
+        repo_root,
+        "data",
+        "raw",
+        "Student folder",
+    )
+
+    processed_root = os.path.join(
+        repo_root,
+        "data",
+        "processed",
+    )
+
+    results_root = os.path.join(
+        repo_root,
+        "results",
+        "experiments",
+    )
 
     summaries = {}
 
     if args.partition in ("train", "both"):
-        print("\n=== Processing TRAIN partition ===", flush=True)
-        train_dir = os.path.join(raw_root, "train")
-        train_out = os.path.join(processed_root, "train_candidates.parquet")
-        summaries["train"] = build_partition_features(
-            train_dir, train_out, radius=args.radius
+        print(
+            "\n=== Processing TRAIN partition ===",
+            flush=True,
         )
-        print(f"\nTrain summary: {summaries['train']}", flush=True)
+
+        train_dir = os.path.join(raw_root, "train")
+
+        train_out = os.path.join(
+            processed_root,
+            "train_candidates.parquet",
+        )
+
+        summaries["train"] = build_partition_features(
+            train_dir,
+            train_out,
+            radius=args.radius,
+        )
+
+        print(
+            f"\nTrain summary: {summaries['train']}",
+            flush=True,
+        )
 
     if args.partition in ("student_test", "both"):
-        print("\n=== Processing STUDENT_TEST partition ===", flush=True)
-        test_dir = os.path.join(raw_root, "student_test")
-        test_out = os.path.join(processed_root, "student_test_candidates.parquet")
-        summaries["student_test"] = build_partition_features(
-            test_dir, test_out, radius=args.radius
+        print(
+            "\n=== Processing STUDENT_TEST partition ===",
+            flush=True,
         )
-        print(f"\nStudent test summary: {summaries['student_test']}", flush=True)
 
-    # Save miss rate report
+        test_dir = os.path.join(
+            raw_root,
+            "student_test",
+        )
+
+        test_out = os.path.join(
+            processed_root,
+            "student_test_candidates.parquet",
+        )
+
+        summaries["student_test"] = build_partition_features(
+            test_dir,
+            test_out,
+            radius=args.radius,
+        )
+
+        print(
+            f"\nStudent test summary: {summaries['student_test']}",
+            flush=True,
+        )
+
+    # Save candidate miss-rate report for training data.
     from src.data.miss_rate import compute_miss_rates
 
     if "train" in summaries:
-        miss_rate_path = os.path.join(results_root, "candidate_miss_rates.csv")
-        compute_miss_rates(summaries["train"], miss_rate_path, radius=args.radius)
+        miss_rate_path = os.path.join(
+            results_root,
+            "candidate_miss_rates.csv",
+        )
+
+        compute_miss_rates(
+            summaries["train"],
+            miss_rate_path,
+            radius=args.radius,
+        )
