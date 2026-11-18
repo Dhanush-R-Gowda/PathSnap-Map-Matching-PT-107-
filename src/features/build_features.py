@@ -51,13 +51,29 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
     pd.DataFrame with the Phase 1 schema (see specification)
     """
     data = load_trip(trip_dir)
-    track = data["track"]
-    nodes = data["nodes"]
-    arcs = data["arcs"]
-    route = data["route"]
+    return _build_features_core(
+        trip_id, data["track"], data["nodes"], data["arcs"], radius,
+        route=data["route"],
+    )
 
+
+def build_trip_features_inference(trip_id, track, nodes, arcs, radius=50.0):
+    """Route-free feature generation for inference (no ground truth needed).
+
+    Same candidate generation and 14 model features as training, but never
+    touches the .route file or the alignment; no label columns are produced.
+
+    Returns
+    -------
+    pd.DataFrame with trip_id, obs_index, arc_id + the 14 model features.
+    """
+    return _build_features_core(trip_id, track, nodes, arcs, radius, route=None)
+
+
+def _build_features_core(trip_id, track, nodes, arcs, radius, route=None):
+    """Shared implementation. ``route=None`` -> inference mode (no labels)."""
+    inference = route is None
     N = len(track)
-    M = len(route)
 
     proj = build_projection(track)
 
@@ -77,9 +93,12 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
         candidates_per_obs.append(cands)
 
     # --- Label alignment ---
-    obs_to_route_pos, obs_to_arc = align_observations(
-        track, nodes, arcs, route, proj
-    )
+    if inference:
+        obs_to_arc = np.full(N, -1, dtype=np.int64)
+    else:
+        _obs_to_route_pos, obs_to_arc = align_observations(
+            track, nodes, arcs, route, proj
+        )
 
     # --- Degree maps ---
     out_deg, in_deg = _build_degree_maps(arcs)
@@ -167,7 +186,7 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
 
             label = int(arc_id == gt_arc)
 
-            rows.append({
+            row = {
                 "trip_id": trip_id,
                 "obs_index": np.int32(i),
                 "arc_id": np.int32(arc_id),
@@ -185,16 +204,19 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
                 "is_gap_prev": np.int8(is_gap_prev[i]),
                 "is_gap_next": np.int8(is_gap_next[i]),
                 "heading_reliable": np.int8(heading_reliable[i]),
-                "label": np.int8(label),
-                "is_gt_in_candidates": gt_in_cands,
-            })
+            }
+            if not inference:
+                row["label"] = np.int8(label)
+                row["is_gt_in_candidates"] = gt_in_cands
+            rows.append(row)
 
     if not rows:
         # Return empty DataFrame with correct schema
-        return _empty_schema_df()
+        empty = _empty_schema_df()
+        return empty.drop(columns=["label", "is_gt_in_candidates"]) if inference else empty
 
     df = pd.DataFrame(rows)
-    df = df.astype({
+    dtypes = {
         "trip_id": "object",
         "obs_index": "int32",
         "arc_id": "int32",
@@ -214,7 +236,8 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
         "heading_reliable": "int8",
         "label": "int8",
         "is_gt_in_candidates": "bool",
-    })
+    }
+    df = df.astype({k: v for k, v in dtypes.items() if k in df.columns})
 
     return df
 
