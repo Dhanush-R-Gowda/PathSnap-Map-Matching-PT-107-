@@ -301,6 +301,7 @@ def test_load_trip_for_inference_loads_data():
         assert len(result["arcs"]) == 3
 
 
+
 def test_inference_df_has_correct_columns():
     """Inference features match the 17-column route-free schema."""
     df = _synthetic_inference_frame()
@@ -344,20 +345,29 @@ def test_inference_matches_training_features():
     """Inference and training pipelines produce identical feature values for shared columns."""
     trip_id = "00000001"
     trip_dir = os.path.join(RAW_ROOT, trip_id)
+
+    # Training pipeline (has route)
     df_train = build_trip_features(trip_id, trip_dir, radius=50.0)
+
+    # Inference pipeline (does not require route)
     data = load_trip_for_inference(trip_dir)
     df_infer = build_trip_features_inference(
         trip_id, data["track"], data["nodes"], data["arcs"], radius=50.0
     )
+
     assert len(df_train) == len(df_infer), (
         f"Row count mismatch: train={len(df_train)} infer={len(df_infer)}"
     )
+
     shared_cols = [
         c for c in INFERENCE_COLS
         if c not in ("trip_id", "obs_index", "arc_id") and c in df_train.columns
     ]
+
     for col in shared_cols:
         np.testing.assert_array_almost_equal(
-            df_train[col].values, df_infer[col].values, decimal=5,
+            df_train[col].values,
+            df_infer[col].values,
+            decimal=5,
             err_msg=f"Column {col!r} differs between training and inference pipelines",
         )
