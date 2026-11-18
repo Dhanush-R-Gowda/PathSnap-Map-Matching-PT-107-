@@ -198,6 +198,24 @@ def load_trip(trip_dir):
     }
 
 
+def load_trip_for_inference(trip_dir):
+    """Load trip data for inference (no ground-truth route required).
+
+    Parameters
+    ----------
+    trip_dir : str
+
+    Returns
+    -------
+    dict with keys: track, nodes, arcs
+    """
+    return {
+        "track": load_track(trip_dir),
+        "nodes": load_nodes(trip_dir),
+        "arcs":  load_arcs(trip_dir),
+    }
+
+
 def discover_trips(partition_dir):
     """Discover all trip subdirectories in a partition.
 

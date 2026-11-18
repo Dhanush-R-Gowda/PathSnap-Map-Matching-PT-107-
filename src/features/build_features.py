@@ -219,6 +219,167 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
     return df
 
 
+def build_trip_features_inference(trip_id, track, nodes, arcs, radius=50.0):
+    """Build candidate feature DataFrame for inference (no ground-truth route needed).
+
+    Produces the same 14 model-input feature columns as build_trip_features but
+    omits ``label`` and ``is_gt_in_candidates``.  Call this from the FastAPI
+    endpoint after loading the trip with load_trip_for_inference().
+
+    Parameters
+    ----------
+    trip_id : str
+    track   : list of (lon, lat, ts) tuples
+    nodes   : list of (lon, lat) tuples
+    arcs    : list of (from_node_id, to_node_id) tuples
+    radius  : float — candidate search radius in metres (default 50.0)
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        trip_id, obs_index, arc_id,
+        snap_distance_m, snap_t, arc_length_m,
+        bearing_diff_rad, abs_bearing_diff_rad,
+        gps_speed_mps, gps_heading_rad,
+        dt_prev_s, dt_next_s,
+        out_degree, in_degree,
+        is_gap_prev, is_gap_next, heading_reliable
+    Sorted by obs_index ascending, then snap_distance_m ascending within each obs.
+    """
+    N = len(track)
+
+    proj = build_projection(track)
+
+    # --- Spatial index ---
+    tree, midpoints_array, arc_ids_array, max_arc_half_length = build_spatial_index(
+        nodes, arcs, proj
+    )
+
+    # --- Candidate generation ---
+    candidates_per_obs = []
+    for lon, lat, _ts in track:
+        cands = get_candidates(
+            lon, lat, proj, tree, nodes, arcs, arc_ids_array,
+            max_arc_half_length, radius=radius
+        )
+        candidates_per_obs.append(cands)
+
+    # --- Degree maps ---
+    out_deg, in_deg = _build_degree_maps(arcs)
+
+    # --- Arc feature caches (same pattern as build_trip_features) ---
+    arc_len_cache = {}
+    arc_bearing_cache = {}
+
+    def get_arc_len(arc_id):
+        if arc_id not in arc_len_cache:
+            from_id, to_id = arcs[arc_id]
+            arc_len_cache[arc_id] = arc_length(nodes, from_id, to_id, proj)
+        return arc_len_cache[arc_id]
+
+    def get_arc_bearing(arc_id):
+        if arc_id not in arc_bearing_cache:
+            from_id, to_id = arcs[arc_id]
+            lon_a, lat_a = nodes[from_id]
+            lon_b, lat_b = nodes[to_id]
+            ax, ay = project(lon_a, lat_a, proj)
+            bx, by = project(lon_b, lat_b, proj)
+            arc_bearing_cache[arc_id] = bearing(ax, ay, bx, by)
+        return arc_bearing_cache[arc_id]
+
+    # --- GPS kinematics (identical to build_trip_features) ---
+    timestamps = np.array([ts for _, _, ts in track])
+    dt_prev = np.zeros(N, dtype=np.float32)
+    dt_next = np.zeros(N, dtype=np.float32)
+
+    if N > 1:
+        dt_prev[1:] = (timestamps[1:] - timestamps[:-1]).astype(np.float32)
+        dt_next[:-1] = dt_prev[1:]
+
+    heading_reliable = np.zeros(N, dtype=np.int8)
+    gps_speed = np.zeros(N, dtype=np.float32)
+    gps_heading = np.zeros(N, dtype=np.float32)
+
+    for i in range(1, N):
+        if 0.0 < dt_prev[i] < 5.0:
+            heading_reliable[i] = 1
+            lon0, lat0, _ = track[i - 1]
+            lon1, lat1, _ = track[i]
+            x0, y0 = project(lon0, lat0, proj)
+            x1, y1 = project(lon1, lat1, proj)
+            dist_m = math.hypot(x1 - x0, y1 - y0)
+            hdg = bearing(x0, y0, x1, y1)
+            gps_speed[i] = dist_m / float(dt_prev[i])
+            gps_heading[i] = hdg
+
+    is_gap_prev = (dt_prev >= 5.0).astype(np.int8)
+    is_gap_next = (dt_next >= 5.0).astype(np.int8)
+
+    # --- Build rows ---
+    rows = []
+    for i in range(N):
+        cands = candidates_per_obs[i]
+        for arc_id, snap_dist, snap_t in cands:
+            from_id, to_id = arcs[arc_id]
+            a_len = get_arc_len(arc_id)
+            a_bearing = get_arc_bearing(arc_id)
+
+            if heading_reliable[i]:
+                bdiff = wrap_angle(a_bearing - float(gps_heading[i]))
+                abs_bdiff = abs(bdiff)
+            else:
+                bdiff = 0.0
+                abs_bdiff = 0.0
+
+            od = out_deg.get(to_id, 0)
+            ind = in_deg.get(from_id, 0)
+
+            rows.append({
+                "trip_id":             trip_id,
+                "obs_index":           np.int32(i),
+                "arc_id":              np.int32(arc_id),
+                "snap_distance_m":     np.float32(snap_dist),
+                "snap_t":              np.float32(snap_t),
+                "arc_length_m":        np.float32(a_len),
+                "bearing_diff_rad":    np.float32(bdiff),
+                "abs_bearing_diff_rad": np.float32(abs_bdiff),
+                "gps_speed_mps":       np.float32(gps_speed[i]),
+                "gps_heading_rad":     np.float32(gps_heading[i]),
+                "dt_prev_s":           np.float32(dt_prev[i]),
+                "dt_next_s":           np.float32(dt_next[i]),
+                "out_degree":          np.int16(od),
+                "in_degree":           np.int16(ind),
+                "is_gap_prev":         np.int8(is_gap_prev[i]),
+                "is_gap_next":         np.int8(is_gap_next[i]),
+                "heading_reliable":    np.int8(heading_reliable[i]),
+            })
+
+    if not rows:
+        return _empty_inference_schema_df()
+
+    df = pd.DataFrame(rows)
+    df = df.astype({
+        "trip_id":             "object",
+        "obs_index":           "int32",
+        "arc_id":              "int32",
+        "snap_distance_m":     "float32",
+        "snap_t":              "float32",
+        "arc_length_m":        "float32",
+        "bearing_diff_rad":    "float32",
+        "abs_bearing_diff_rad": "float32",
+        "gps_speed_mps":       "float32",
+        "gps_heading_rad":     "float32",
+        "dt_prev_s":           "float32",
+        "dt_next_s":           "float32",
+        "out_degree":          "int16",
+        "in_degree":           "int16",
+        "is_gap_prev":         "int8",
+        "is_gap_next":         "int8",
+        "heading_reliable":    "int8",
+    })
+    return df
+
+
 def _empty_schema_df():
     """Return an empty DataFrame with the correct Phase 1 schema."""
     return pd.DataFrame(columns=[
@@ -247,6 +408,35 @@ def _empty_schema_df():
         "heading_reliable": "int8",
         "label": "int8",
         "is_gt_in_candidates": "bool",
+    })
+
+
+def _empty_inference_schema_df():
+    """Return an empty DataFrame with the inference schema (no label columns)."""
+    return pd.DataFrame(columns=[
+        "trip_id", "obs_index", "arc_id", "snap_distance_m", "snap_t",
+        "arc_length_m", "bearing_diff_rad", "abs_bearing_diff_rad",
+        "gps_speed_mps", "gps_heading_rad", "dt_prev_s", "dt_next_s",
+        "out_degree", "in_degree", "is_gap_prev", "is_gap_next",
+        "heading_reliable",
+    ]).astype({
+        "trip_id":              "object",
+        "obs_index":            "int32",
+        "arc_id":               "int32",
+        "snap_distance_m":      "float32",
+        "snap_t":               "float32",
+        "arc_length_m":         "float32",
+        "bearing_diff_rad":     "float32",
+        "abs_bearing_diff_rad": "float32",
+        "gps_speed_mps":        "float32",
+        "gps_heading_rad":      "float32",
+        "dt_prev_s":            "float32",
+        "dt_next_s":            "float32",
+        "out_degree":           "int16",
+        "in_degree":            "int16",
+        "is_gap_prev":          "int8",
+        "is_gap_next":          "int8",
+        "heading_reliable":     "int8",
     })
 
 
