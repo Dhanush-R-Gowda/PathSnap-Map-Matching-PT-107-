@@ -221,3 +221,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# PathSnap project files
+
+# Raw and processed datasets
+data/raw/*
+data/processed/*
+
+# Saved model weights
+artifacts/models/*
+
+# Experiment outputs (keep folder structure)
+results/metrics/*
+results/plots/*
+results/experiments/*
+
+# Environment variables
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
