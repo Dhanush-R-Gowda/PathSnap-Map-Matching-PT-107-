@@ -214,5 +214,3 @@ def test_model_artifact_saving_and_loading_is_prediction_consistent(tmp_path):
     assert np.allclose(before, after)
     assert (tmp_path / "preprocessing_pipeline.pkl").is_file()
     assert json.loads((tmp_path / "feature_schema.json").read_text())["feature_columns"] == APPROVED_FEATURE_COLUMNS
-
-\n

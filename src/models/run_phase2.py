@@ -140,6 +140,8 @@ def _implementation_markdown(
     ]
     table = comparison.rename(columns={
         "mean_macro_f1": "CV Macro F1",
+        "mean_candidate_positive_precision": "Candidate Positive Precision",
+        "mean_candidate_binary_accuracy": "Candidate Binary Accuracy",
         "mean_top1_accuracy": "Top-1 Accuracy",
         "mean_log_loss": "Log Loss",
         "candidate_miss_rate": "Candidate Miss Rate",
@@ -147,9 +149,29 @@ def _implementation_markdown(
         "cv_training_time_s": "CV Training Time (s)",
         "cv_inference_time_s": "CV Inference Time (s)",
     })
-    display_cols = ["model", "CV Macro F1", "Top-1 Accuracy", "Log Loss", "Candidate Miss Rate", "Route Continuity", "CV Training Time (s)", "CV Inference Time (s)"]
+    display_cols = [
+        "model", "CV Macro F1", "Candidate Positive Precision", "Candidate Binary Accuracy", "Top-1 Accuracy",
+        "Log Loss", "Candidate Miss Rate", "Route Continuity", "CV Training Time (s)", "CV Inference Time (s)",
+    ]
+    ranking_cols = [
+        "model", "pooled_macro_f1", "pooled_candidate_positive_precision", "pooled_candidate_binary_accuracy",
+        "pooled_top1_accuracy", "macro_f1_rank", "candidate_precision_rank", "candidate_accuracy_rank", "top1_accuracy_rank",
+    ]
+    ranking_table = comparison[ranking_cols].rename(columns={
+        "pooled_macro_f1": "Pooled OOF Macro F1",
+        "pooled_candidate_positive_precision": "Pooled OOF Positive Precision",
+        "pooled_candidate_binary_accuracy": "Pooled OOF Candidate Accuracy",
+        "pooled_top1_accuracy": "Pooled OOF Top-1 Accuracy",
+        "macro_f1_rank": "Macro F1 Rank",
+        "candidate_precision_rank": "Precision Rank",
+        "candidate_accuracy_rank": "Candidate Accuracy Rank",
+        "top1_accuracy_rank": "Top-1 Accuracy Rank",
+    })
     tuned_table = tuned_vs_untuned.copy()
-    tuned_cols = [c for c in ["configuration", "macro_f1_mean", "top1_accuracy_mean", "log_loss_mean", "route_continuity_pooled", "training_time_s", "inference_time_s"] if c in tuned_table]
+    tuned_cols = [c for c in [
+        "configuration", "macro_f1_mean", "candidate_positive_precision_mean", "candidate_binary_accuracy_mean",
+        "top1_accuracy_mean", "log_loss_mean", "route_continuity_pooled", "training_time_s", "inference_time_s",
+    ] if c in tuned_table]
     train = schema["training"]
     test = schema["student_test"]
     features = ", ".join(f"`{c}`" for c in train["feature_columns"])
@@ -184,7 +206,7 @@ def _implementation_markdown(
         "",
         "`GroupKFold(n_splits=5)` assigns trips to folds before candidate rows are filtered. Every row from a held-out trip stays in validation; only eligible rows from training trips are fit. Automated assertions verify that training and validation trip ID sets do not overlap. The exact IDs and row counts are recorded in `results/cv_results.csv`.",
         "",
-        "Candidate Macro F1 is binary macro-averaged F1 over eligible candidate rows at a 0.5 probability threshold. Top-1 Accuracy selects the highest-scoring candidate independently for each eligible observation and checks whether that row is the aligned arc. Candidate Log Loss and Brier Score use binary candidate probabilities. Fold means and standard deviations are reported; `cv_results.csv` also has per-trip and pooled out-of-fold rows.",
+        "Candidate Macro F1 is binary macro-averaged F1 over eligible candidate rows at a 0.5 probability threshold. Candidate Positive Precision measures the share of predicted positive candidates that are correct at that threshold; Candidate Binary Accuracy measures all eligible candidate rows at the same threshold. Top-1 Accuracy separately selects the highest-scoring candidate for each eligible observation and checks whether it is the aligned arc. Fold means and standard deviations are reported; `cv_results.csv` also has per-trip and pooled out-of-fold rows. `model_comparison.csv` includes 1-based ranks for Macro F1, positive precision, binary candidate accuracy, and top-1 accuracy; higher values rank first.",
         "",
         "Candidate Miss Rate is the fraction of all raw observations with no ground-truth candidate. It includes observations with no candidate rows. Route Continuity is connected top-1 directed arc pairs divided by directly consecutive observation pairs where both observations have candidates; a pair connects when the first arc's `to_node` equals the next arc's `from_node` in that trip's graph. Arc IDs remain scoped by trip.",
         "",
@@ -193,6 +215,12 @@ def _implementation_markdown(
         "## Model comparison and selection",
         "",
         _format_table(table, display_cols),
+        "",
+        "### Metric rankings",
+        "",
+        "Ranks are based on pooled out-of-fold (OOF) predictions from the same five trip-grouped folds; higher metrics rank first. Positive precision and candidate binary accuracy use a 0.5 probability threshold. Top-1 accuracy selects the highest-scoring candidate per eligible observation.",
+        "",
+        _format_table(ranking_table, list(ranking_table.columns)),
         "",
         f"Selected baseline: **{selected['selected_model']}**. Selection uses a weighted mean of percentile ranks: Top-1 Accuracy (0.23), candidate Macro F1 (0.23), route continuity (0.18), candidate Log Loss (0.14), Macro F1 fold stability (0.10), five-fold training time (0.07), and inference time (0.05). Lower Log Loss, variability, and both time measures rank higher. The selection details and per-metric ranks are saved in `results/model_comparison.json`.",
         "",
@@ -221,7 +249,7 @@ def _implementation_markdown(
         "",
         "The selected tuned estimator was fitted only on eligible training observations from the 80 training trips. Student-test labels were used once for the requested final evaluation and not for model selection or optimization.",
         "",
-        f"Metrics: Top-1 Accuracy {student_metrics.get('top1_accuracy')!s}; candidate Macro F1 {student_metrics.get('macro_f1')!s}; candidate Log Loss {student_metrics.get('log_loss')!s}; candidate miss rate {student_metrics.get('candidate_miss_rate')!s}; route continuity {student_metrics.get('route_continuity')!s}; Brier Score {student_metrics.get('brier_score')!s}; expected calibration error {student_metrics.get('expected_calibration_error')!s}; final-model training time {test_result['final_training_time_s']:.3f}s; student-test inference time {test_result['student_test_inference_time_s']:.3f}s.",
+        f"Metrics: Top-1 Accuracy {student_metrics.get('top1_accuracy')!s}; candidate Macro F1 {student_metrics.get('macro_f1')!s}; candidate positive precision {student_metrics.get('candidate_positive_precision')!s}; candidate binary accuracy {student_metrics.get('candidate_binary_accuracy')!s}; candidate Log Loss {student_metrics.get('log_loss')!s}; candidate miss rate {student_metrics.get('candidate_miss_rate')!s}; route continuity {student_metrics.get('route_continuity')!s}; Brier Score {student_metrics.get('brier_score')!s}; expected calibration error {student_metrics.get('expected_calibration_error')!s}; final-model training time {test_result['final_training_time_s']:.3f}s; student-test inference time {test_result['student_test_inference_time_s']:.3f}s.",
         "",
         "## Saved artifacts",
         "",
@@ -255,6 +283,13 @@ def _comparison_row(result: dict) -> dict:
         "model": result["model"],
         "mean_macro_f1": result.get("mean_macro_f1"),
         "std_macro_f1": result.get("std_macro_f1"),
+        "pooled_macro_f1": pooled.get("macro_f1"),
+        "mean_candidate_positive_precision": result.get("mean_candidate_positive_precision"),
+        "std_candidate_positive_precision": result.get("std_candidate_positive_precision"),
+        "pooled_candidate_positive_precision": pooled.get("candidate_positive_precision"),
+        "mean_candidate_binary_accuracy": result.get("mean_candidate_binary_accuracy"),
+        "std_candidate_binary_accuracy": result.get("std_candidate_binary_accuracy"),
+        "pooled_candidate_binary_accuracy": pooled.get("candidate_binary_accuracy"),
         "mean_top1_accuracy": result.get("mean_top1_accuracy"),
         "std_top1_accuracy": result.get("std_top1_accuracy"),
         "pooled_top1_accuracy": pooled.get("top1_accuracy"),
@@ -375,6 +410,8 @@ def run(args: argparse.Namespace) -> dict:
         comparison_rows.append(_comparison_row(result))
         print(
             f"  pooled OOF: Macro F1={result['pooled_metrics']['macro_f1']:.4f}, "
+            f"Precision={result['pooled_metrics']['candidate_positive_precision']:.4f}, "
+            f"Candidate Accuracy={result['pooled_metrics']['candidate_binary_accuracy']:.4f}, "
             f"Top-1={result['pooled_metrics']['top1_accuracy']:.4f}, "
             f"LogLoss={result['pooled_metrics']['log_loss']:.4f}, "
             f"continuity={result['pooled_metrics']['route_continuity']:.4f}",
@@ -382,6 +419,13 @@ def run(args: argparse.Namespace) -> dict:
         )
 
     comparison = pd.DataFrame(comparison_rows)
+    for rank_column, metric_column in [
+        ("macro_f1_rank", "pooled_macro_f1"),
+        ("candidate_precision_rank", "pooled_candidate_positive_precision"),
+        ("candidate_accuracy_rank", "pooled_candidate_binary_accuracy"),
+        ("top1_accuracy_rank", "pooled_top1_accuracy"),
+    ]:
+        comparison[rank_column] = comparison[metric_column].rank(method="min", ascending=False).astype("Int64")
     selected_name, selection = select_model(comparison)
     comparison["selection_score"] = comparison["model"].map(selection["model_scores"])
     comparison.to_csv(results_root / "model_comparison.csv", index=False)
@@ -438,6 +482,8 @@ def run(args: argparse.Namespace) -> dict:
             "configuration": "untuned_baseline",
             "macro_f1_mean": baseline_result["mean_macro_f1"],
             "macro_f1_std": baseline_result["std_macro_f1"],
+            "candidate_positive_precision_mean": baseline_result["mean_candidate_positive_precision"],
+            "candidate_binary_accuracy_mean": baseline_result["mean_candidate_binary_accuracy"],
             "top1_accuracy_mean": baseline_result["mean_top1_accuracy"],
             "log_loss_mean": baseline_result["mean_log_loss"],
             "route_continuity_pooled": baseline_result["pooled_metrics"]["route_continuity"],
@@ -449,6 +495,8 @@ def run(args: argparse.Namespace) -> dict:
             "configuration": "tuned",
             "macro_f1_mean": tuned_cv["mean_macro_f1"],
             "macro_f1_std": tuned_cv["std_macro_f1"],
+            "candidate_positive_precision_mean": tuned_cv["mean_candidate_positive_precision"],
+            "candidate_binary_accuracy_mean": tuned_cv["mean_candidate_binary_accuracy"],
             "top1_accuracy_mean": tuned_cv["mean_top1_accuracy"],
             "log_loss_mean": tuned_cv["mean_log_loss"],
             "route_continuity_pooled": tuned_cv["pooled_metrics"]["route_continuity"],
