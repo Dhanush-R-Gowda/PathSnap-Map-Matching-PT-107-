@@ -92,11 +92,11 @@ Metrics: Top-1 Accuracy 0.8206240526838446; candidate Macro F1 0.879223553206181
 
 ## Saved artifacts
 
-- `best_model`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\best_model.pkl`
-- `preprocessing_pipeline`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\preprocessing_pipeline.pkl`
-- `feature_schema`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\feature_schema.json`
-- `model_metadata`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\model_metadata.json`
-- `best_hyperparameters`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\best_hyperparameters.json`
+- `best_model`: `artifacts/best_model.pkl`
+- `preprocessing_pipeline`: `artifacts/preprocessing_pipeline.pkl`
+- `feature_schema`: `artifacts/feature_schema.json`
+- `model_metadata`: `artifacts/model_metadata.json`
+- `best_hyperparameters`: `artifacts/best_hyperparameters.json`
 
 ## Limitations
 

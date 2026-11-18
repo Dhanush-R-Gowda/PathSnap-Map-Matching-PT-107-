@@ -245,11 +245,6 @@ results/optimization_trials.csv
 results/best_hyperparameters.json
 results/tuned_vs_untuned.csv
 results/prediction_probabilities/*
-artifacts/best_model.pkl
-artifacts/preprocessing_pipeline.pkl
-artifacts/feature_schema.json
-artifacts/model_metadata.json
-artifacts/best_hyperparameters.json
 
 # Environment variables
 .env.*
