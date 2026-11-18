@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import f1_score, log_loss
+from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score
 from sklearn.model_selection import GroupKFold
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neural_network import MLPClassifier
@@ -583,7 +583,10 @@ def evaluate_predictions(
     eligible_p = safe[eligible_mask]
     if len(eligible):
         y_true = eligible[TARGET_COLUMN].astype(int).to_numpy()
-        binary_macro_f1 = float(f1_score(y_true, eligible_p >= 0.5, average="macro", zero_division=0))
+        candidate_prediction = eligible_p >= 0.5
+        binary_macro_f1 = float(f1_score(y_true, candidate_prediction, average="macro", zero_division=0))
+        candidate_precision = float(precision_score(y_true, candidate_prediction, pos_label=1, zero_division=0))
+        candidate_accuracy = float(accuracy_score(y_true, candidate_prediction))
         binary_log_loss = float(log_loss(y_true, eligible_p, labels=[0, 1]))
         brier = float(np.mean((eligible_p - y_true) ** 2))
         ece = expected_calibration_error(y_true, eligible_p)
@@ -594,7 +597,8 @@ def evaluate_predictions(
         correct_by_obs = normalized.loc[normalized[TARGET_COLUMN].astype(int).eq(1), "probability"].to_numpy()
         observation_log_loss = float(-np.log(np.clip(correct_by_obs, 1e-15, 1.0)).mean()) if len(correct_by_obs) else None
     else:
-        binary_macro_f1 = binary_log_loss = brier = ece = top1 = observation_log_loss = None
+        binary_macro_f1 = candidate_precision = candidate_accuracy = None
+        binary_log_loss = brier = ece = top1 = observation_log_loss = None
 
     miss = candidate_miss_metrics(frame, raw_context, selected)
     continuity = route_continuity_metrics(
@@ -603,6 +607,8 @@ def evaluate_predictions(
     return {
         "top1_accuracy": top1,
         "macro_f1": binary_macro_f1,
+        "candidate_positive_precision": candidate_precision,
+        "candidate_binary_accuracy": candidate_accuracy,
         "log_loss": binary_log_loss,
         "brier_score": brier,
         "expected_calibration_error": ece,
@@ -727,7 +733,7 @@ def cross_validate_model(
         "cv_training_time_s": float(total_fit_seconds),
         "cv_inference_time_s": float(total_inference_seconds),
     }
-    for metric in ["top1_accuracy", "macro_f1", "log_loss", "brier_score", "expected_calibration_error", "candidate_miss_rate", "route_continuity", "normalized_observation_log_loss"]:
+    for metric in ["top1_accuracy", "macro_f1", "candidate_positive_precision", "candidate_binary_accuracy", "log_loss", "brier_score", "expected_calibration_error", "candidate_miss_rate", "route_continuity", "normalized_observation_log_loss"]:
         mean, std = _fold_metric_summary(fold_rows, metric)
         summary[f"mean_{metric}"] = mean
         summary[f"std_{metric}"] = std
@@ -903,6 +909,8 @@ def comparison_plots(comparison: pd.DataFrame, output_dir: str | Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     plot_specs = [
         ("mean_macro_f1", "std_macro_f1", "Macro F1", "macro_f1_comparison.png", False),
+        ("mean_candidate_positive_precision", "std_candidate_positive_precision", "Candidate Positive Precision", "candidate_precision_comparison.png", False),
+        ("mean_candidate_binary_accuracy", "std_candidate_binary_accuracy", "Candidate Binary Accuracy", "candidate_accuracy_comparison.png", False),
         ("mean_top1_accuracy", "std_top1_accuracy", "Top-1 Accuracy", "top1_accuracy_comparison.png", False),
         ("mean_log_loss", "std_log_loss", "Candidate Log Loss", "log_loss_comparison.png", True),
         ("mean_route_continuity", "std_route_continuity", "Route Continuity", "route_continuity_comparison.png", False),

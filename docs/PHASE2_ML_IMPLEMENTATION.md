@@ -44,6 +44,20 @@ Training and inference times in the comparison are cumulative seconds over the f
 | shallow_mlp | 0.8498 | 0.7793 | 0.1291 | 0.1434 | 0.3065 | 220.2545 | 0.4274 |
 | gaussian_naive_bayes | 0.7861 | 0.7576 | 0.3886 | 0.1434 | 0.3092 | 10.5383 | 0.5377 |
 
+### Metric rankings by pooled out-of-fold predictions
+
+The candidate-level precision and accuracy rankings use all held-out candidate predictions pooled across the same five trip-grouped folds. Macro F1, positive-class precision, and candidate binary accuracy use a 0.5 probability threshold. Top-1 accuracy selects the highest-scoring candidate per eligible observation. Higher values rank first.
+
+| model | Candidate Macro F1 | Positive Precision | Candidate Binary Accuracy | Top-1 Accuracy | F1 Rank | Precision Rank | Candidate Accuracy Rank | Top-1 Rank |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| lightgbm | 0.8645 | 0.7822 | 0.9516 | 0.7863 | 1 | 2 | 1 | 2 |
+| random_forest | 0.8544 | 0.8161 | 0.9507 | 0.7897 | 2 | 1 | 2 | 1 |
+| shallow_mlp | 0.8462 | 0.7802 | 0.9470 | 0.7704 | 3 | 3 | 3 | 3 |
+| gaussian_naive_bayes | 0.7851 | 0.5332 | 0.9071 | 0.7489 | 4 | 5 | 5 | 5 |
+| logistic_regression | 0.7828 | 0.7127 | 0.9296 | 0.7586 | 5 | 4 | 4 | 4 |
+
+LightGBM ranks first in pooled Macro F1 and candidate binary accuracy. Random Forest ranks first in positive precision and top-1 accuracy.
+
 Selected baseline: **random_forest**. Selection uses a weighted mean of percentile ranks: Top-1 Accuracy (0.23), candidate Macro F1 (0.23), route continuity (0.18), candidate Log Loss (0.14), Macro F1 fold stability (0.10), five-fold training time (0.07), and inference time (0.05). Lower Log Loss, variability, and both time measures rank higher. The selection details and per-metric ranks are saved in `results/model_comparison.json`.
 
 ## Bayesian optimization
