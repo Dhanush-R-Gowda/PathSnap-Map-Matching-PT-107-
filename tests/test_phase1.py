@@ -217,3 +217,183 @@ def test_is_gap_prev_on_gaps(train_df):
         assert (gap_rows["is_gap_prev"] == 1).all(), (
             "is_gap_prev != 1 for some rows where dt_prev_s >= 5"
         )
+
+# ---------------------------------------------------------------------------
+# Inference pipeline tests
+# ---------------------------------------------------------------------------
+
+import tempfile
+
+from src.data.loader import load_trip_for_inference
+from src.features.build_features import build_trip_features_inference, build_trip_features
+
+TRAIN_DIR = RAW_ROOT
+
+INFERENCE_COLS = [
+    "trip_id", "obs_index", "arc_id",
+    "snap_distance_m", "snap_t", "arc_length_m",
+    "bearing_diff_rad", "abs_bearing_diff_rad",
+    "gps_speed_mps", "gps_heading_rad",
+    "dt_prev_s", "dt_next_s",
+    "out_degree", "in_degree",
+    "is_gap_prev", "is_gap_next", "heading_reliable",
+]
+
+
+def _make_synthetic_trip(tmp_dir):
+    """Write minimal .track, .nodes, .arcs files (no .route) to tmp_dir."""
+    trip_id = os.path.basename(tmp_dir)
+    # 5 GPS observations in a straight line
+    track_lines = [
+        "8.595200 49.844000 1.0",
+        "8.595300 49.844100 2.0",
+        "8.595400 49.844200 3.0",
+        "8.595500 49.844300 4.0",
+        "8.595600 49.844400 5.0",
+    ]
+    # 4 nodes forming a simple road
+    nodes_lines = [
+        "8.595150 49.843950",
+        "8.595350 49.844150",
+        "8.595550 49.844350",
+        "8.595750 49.844550",
+    ]
+    # 3 arcs connecting them
+    arcs_lines = [
+        "0 1",
+        "1 2",
+        "2 3",
+    ]
+    with open(os.path.join(tmp_dir, f"{trip_id}.track"), "w") as f:
+        f.write("\n".join(track_lines) + "\n")
+    with open(os.path.join(tmp_dir, f"{trip_id}.nodes"), "w") as f:
+        f.write("\n".join(nodes_lines) + "\n")
+    with open(os.path.join(tmp_dir, f"{trip_id}.arcs"), "w") as f:
+        f.write("\n".join(arcs_lines) + "\n")
+    return trip_id
+
+
+def test_load_trip_for_inference_no_route_required():
+    """load_trip_for_inference must succeed when .route file is absent."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # rename tmp_dir basename must be 8 digits — create a subdir
+        trip_dir = os.path.join(tmp_dir, "00000999")
+        os.makedirs(trip_dir)
+        _make_synthetic_trip(trip_dir)
+        result = load_trip_for_inference(trip_dir)
+        assert "track" in result
+        assert "nodes" in result
+        assert "arcs" in result
+        assert "route" not in result
+
+
+def test_load_trip_for_inference_loads_data():
+    """load_trip_for_inference returns non-empty lists."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trip_dir = os.path.join(tmp_dir, "00000999")
+        os.makedirs(trip_dir)
+        _make_synthetic_trip(trip_dir)
+        result = load_trip_for_inference(trip_dir)
+        assert len(result["track"]) == 5
+        assert len(result["nodes"]) == 4
+        assert len(result["arcs"]) == 3
+
+
+def test_inference_df_has_correct_columns():
+    """build_trip_features_inference returns DataFrame with exactly the 17 inference columns."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trip_dir = os.path.join(tmp_dir, "00000999")
+        os.makedirs(trip_dir)
+        trip_id = _make_synthetic_trip(trip_dir)
+        data = load_trip_for_inference(trip_dir)
+        df = build_trip_features_inference(
+            trip_id, data["track"], data["nodes"], data["arcs"]
+        )
+        assert list(df.columns) == INFERENCE_COLS
+
+
+def test_inference_df_no_label_columns():
+    """Inference DataFrame must not contain label or is_gt_in_candidates."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trip_dir = os.path.join(tmp_dir, "00000999")
+        os.makedirs(trip_dir)
+        trip_id = _make_synthetic_trip(trip_dir)
+        data = load_trip_for_inference(trip_dir)
+        df = build_trip_features_inference(
+            trip_id, data["track"], data["nodes"], data["arcs"]
+        )
+        assert "label" not in df.columns
+        assert "is_gt_in_candidates" not in df.columns
+
+
+def test_inference_obs_index_nondecreasing():
+    """obs_index in inference DataFrame must be non-decreasing."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trip_dir = os.path.join(tmp_dir, "00000999")
+        os.makedirs(trip_dir)
+        trip_id = _make_synthetic_trip(trip_dir)
+        data = load_trip_for_inference(trip_dir)
+        df = build_trip_features_inference(
+            trip_id, data["track"], data["nodes"], data["arcs"]
+        )
+        assert (df["obs_index"].diff().dropna() >= 0).all()
+
+
+def test_inference_candidates_within_radius():
+    """All candidates in inference DataFrame must be within the search radius."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trip_dir = os.path.join(tmp_dir, "00000999")
+        os.makedirs(trip_dir)
+        trip_id = _make_synthetic_trip(trip_dir)
+        data = load_trip_for_inference(trip_dir)
+        df = build_trip_features_inference(
+            trip_id, data["track"], data["nodes"], data["arcs"], radius=50.0
+        )
+        assert (df["snap_distance_m"] <= 50.0).all()
+
+
+def test_inference_heading_reliable_zero_for_first_obs():
+    """heading_reliable must be 0 for obs_index == 0 (no previous observation)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trip_dir = os.path.join(tmp_dir, "00000999")
+        os.makedirs(trip_dir)
+        trip_id = _make_synthetic_trip(trip_dir)
+        data = load_trip_for_inference(trip_dir)
+        df = build_trip_features_inference(
+            trip_id, data["track"], data["nodes"], data["arcs"]
+        )
+        first_obs = df[df["obs_index"] == 0]
+        assert (first_obs["heading_reliable"] == 0).all()
+
+
+def test_inference_matches_training_features():
+    """Inference and training pipelines must produce identical feature values for shared columns."""
+    trip_id = "00000001"
+    trip_dir = os.path.join(TRAIN_DIR, trip_id)
+
+    # Training pipeline (has route)
+    df_train = build_trip_features(trip_id, trip_dir, radius=50.0)
+
+    # Inference pipeline (no route)
+    data = load_trip_for_inference(trip_dir)
+    df_infer = build_trip_features_inference(
+        trip_id, data["track"], data["nodes"], data["arcs"], radius=50.0
+    )
+
+    # Both should have same number of rows (same candidates, same obs)
+    assert len(df_train) == len(df_infer), (
+        f"Row count mismatch: train={len(df_train)} infer={len(df_infer)}"
+    )
+
+    # Feature columns that exist in both
+    shared_feature_cols = [
+        c for c in INFERENCE_COLS
+        if c not in ("trip_id", "obs_index", "arc_id") and c in df_train.columns
+    ]
+
+    for col in shared_feature_cols:
+        import numpy as np
+        np.testing.assert_array_almost_equal(
+            df_train[col].values, df_infer[col].values, decimal=5,
+            err_msg=f"Column {col!r} differs between training and inference pipelines"
+        )
