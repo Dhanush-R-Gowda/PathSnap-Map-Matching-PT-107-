@@ -1,7 +1,9 @@
 // Backend URL is configurable (never hard-coded to localhost): Vite env var,
 // then the value saved from the UI, then the current host on port 8000.
 const DEFAULT_URL =
-  import.meta.env.VITE_API_URL || `http://${window.location.hostname || "localhost"}:8000`;
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  `http://${window.location.hostname || "localhost"}:8000`;
 
 export function getBackendUrl() {
   try {

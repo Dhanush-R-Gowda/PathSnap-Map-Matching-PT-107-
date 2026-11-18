@@ -1,6 +1,6 @@
 # Phase 1 Review — PathSnap Map-Matching (Pass 2)
 
-**Commits reviewed:** `80eb494` (implementation) + `44ed668` (fix)  
+**Commits reviewed:** `80eb494` (implementation) + `44ed668` (fix)
 **Verdict:** APPROVED
 
 ---
@@ -9,7 +9,7 @@
 
 ### Prior blocker verification
 
-**B1 — candidate_miss_rates.csv missing `total_obs` and `miss_count`**  
+**B1 — candidate_miss_rates.csv missing `total_obs` and `miss_count`**
 Status: **RESOLVED**
 
 The fix commit (`44ed668`) adds `trip_obs_counts` and `trip_miss_counts` dicts to `build_partition_features` (src/features/build_features.py, lines ~175–182 and the return dict). `compute_miss_rates` in `src/data/miss_rate.py` now reads both and writes them to the CSV row. Confirmed: `results/experiments/candidate_miss_rates.csv` header is `trip_id,total_obs,miss_count,miss_rate_pct,radius_m`.
