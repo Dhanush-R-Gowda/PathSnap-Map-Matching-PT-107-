@@ -18,14 +18,15 @@ def compute_miss_rates(summary_dict, output_path, radius=50.0):
     pd.DataFrame with columns: trip_id, total_obs, miss_count, miss_rate_pct, radius_m
     """
     trip_miss_rates = summary_dict.get("trip_miss_rates", {})
+    trip_obs_counts = summary_dict.get("trip_obs_counts", {})
+    trip_miss_counts = summary_dict.get("trip_miss_counts", {})
 
     rows = []
     for trip_id, miss_rate in trip_miss_rates.items():
-        # We need total_obs per trip; derive from miss_rate and stored data
-        # miss_rate is miss_count / total_obs; we stored miss_rate but not raw counts
-        # Store what we have; total_obs can be reconstructed from the parquet later
         rows.append({
             "trip_id": trip_id,
+            "total_obs": trip_obs_counts.get(trip_id, 0),
+            "miss_count": trip_miss_counts.get(trip_id, 0),
             "miss_rate_pct": round(miss_rate * 100.0, 4),
             "radius_m": radius,
         })

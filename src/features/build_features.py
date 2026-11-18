@@ -272,6 +272,8 @@ def build_partition_features(partition_dir, output_path, radius=50.0):
     trip_ids = discover_trips(partition_dir)
     all_dfs = []
     trip_miss_rates = {}
+    trip_obs_counts = {}
+    trip_miss_counts = {}
     total_obs = 0
     total_misses = 0
 
@@ -286,6 +288,8 @@ def build_partition_features(partition_dir, output_path, radius=50.0):
 
         if df.empty:
             trip_miss_rates[trip_id] = 0.0
+            trip_obs_counts[trip_id] = 0
+            trip_miss_counts[trip_id] = 0
             continue
 
         # Per-trip miss stats
@@ -294,6 +298,8 @@ def build_partition_features(partition_dir, output_path, radius=50.0):
         n_miss = int((~per_obs).sum())
         miss_rate = n_miss / n_obs if n_obs > 0 else 0.0
         trip_miss_rates[trip_id] = miss_rate
+        trip_obs_counts[trip_id] = n_obs
+        trip_miss_counts[trip_id] = n_miss
         total_obs += n_obs
         total_misses += n_miss
 
@@ -327,6 +333,8 @@ def build_partition_features(partition_dir, output_path, radius=50.0):
         "class_balance": class_balance,
         "overall_miss_rate": overall_miss_rate,
         "trip_miss_rates": trip_miss_rates,
+        "trip_obs_counts": trip_obs_counts,
+        "trip_miss_counts": trip_miss_counts,
     }
 
 
