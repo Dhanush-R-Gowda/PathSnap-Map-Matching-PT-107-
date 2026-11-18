@@ -246,3 +246,10 @@ results/experiments/*
 
 # macOS
 .DS_Store
+ # Node.js / React frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local backend uploads
+backend/uploads/
