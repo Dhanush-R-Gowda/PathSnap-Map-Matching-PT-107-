@@ -1,8 +1,10 @@
 
-# PathSnap — Backend and UI Planning
+# PathSnap - Backend and UI Design Notes
 
 **Responsible:** Baby (Person 4)  
 **Project:** Distributed Map-Matching & Route Reconstruction
+
+> This document preserves the original design plan for context. The current implementation is summarized in Section 10 and specified in `docs/api-specification.md` and `README.md`.
 
 ## 1. Objective
 
@@ -123,4 +125,11 @@ These are proposed examples, not actual prediction results. Final API formats wi
 
 ## 10. Current Status
 
-Planning stage. Backend implementation, frontend development, model integration and deployment testing are pending.
+The integration is implemented in `backend/main.py`, `backend/services/inference.py`, and `frontend/src/App.jsx`.
+
+- The backend loads the saved model and schema on startup, lists route-free demo trips, validates `.track`/`.nodes`/`.arcs` uploads, runs candidate inference and HMM/Viterbi decoding, and serves result and Folium-map routes.
+- The React UI loads trip and model metadata from the API, accepts all three trip files, runs map matching, and displays GPS, candidate-road, classifier, and HMM layers plus route diagnostics.
+- The current decoder preserves explicit resets for missing candidates, long time gaps, and disconnected candidate sets. It reports warnings instead of fabricating road connectors.
+- Two-laptop commands and CORS settings are documented in the repository `README.md`.
+
+Automated backend and integration coverage is in `tests/test_backend.py` and `tests/test_hmm_integration.py`. A manual interactive browser workflow and two-laptop LAN connectivity still need deployment-machine verification. The local browser automation bridge was unavailable during this review.

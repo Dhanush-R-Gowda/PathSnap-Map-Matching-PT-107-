@@ -7,7 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from src.data.loader import load_trip, discover_trips
+from src.data.loader import load_arcs, load_nodes, load_route, load_track, discover_trips
 from src.utils.geometry import (
     build_projection, project, arc_length, bearing, wrap_angle
 )
@@ -37,7 +37,7 @@ def _build_degree_maps(arcs):
 # Single-trip pipeline
 # ---------------------------------------------------------------------------
 
-def build_trip_features(trip_id, trip_dir, radius=50.0):
+def build_trip_features(trip_id, trip_dir, radius=50.0, include_labels=True):
     """Run the full Phase 1 pipeline for one trip and return a feature DataFrame.
 
     Parameters
@@ -50,14 +50,21 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
     -------
     pd.DataFrame with the Phase 1 schema (see specification)
     """
-    data = load_trip(trip_dir)
-    track = data["track"]
-    nodes = data["nodes"]
-    arcs = data["arcs"]
-    route = data["route"]
+    # Inference deliberately loads no .route file. Keep labels on the training
+    # path only so evaluator data cannot leak into candidate features.
+    track = load_track(trip_dir)
+    nodes = load_nodes(trip_dir)
+    arcs = load_arcs(trip_dir)
+    route = load_route(trip_dir) if include_labels else None
 
     N = len(track)
-    M = len(route)
+    if not N:
+        raise ValueError(f"Trip {trip_id} has no valid GPS observations")
+    if not nodes or not arcs:
+        raise ValueError(f"Trip {trip_id} must contain road nodes and arcs")
+    for arc_id, (from_id, to_id) in enumerate(arcs):
+        if from_id < 0 or to_id < 0 or from_id >= len(nodes) or to_id >= len(nodes):
+            raise ValueError(f"Trip {trip_id} arc {arc_id} references a missing node")
 
     proj = build_projection(track)
 
@@ -77,9 +84,12 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
         candidates_per_obs.append(cands)
 
     # --- Label alignment ---
-    obs_to_route_pos, obs_to_arc = align_observations(
-        track, nodes, arcs, route, proj
-    )
+    if include_labels:
+        _obs_to_route_pos, obs_to_arc = align_observations(
+            track, nodes, arcs, route, proj
+        )
+    else:
+        obs_to_arc = None
 
     # --- Degree maps ---
     out_deg, in_deg = _build_degree_maps(arcs)
@@ -140,15 +150,15 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
     miss_obs = []
 
     for i in range(N):
-        gt_arc = int(obs_to_arc[i])
+        gt_arc = int(obs_to_arc[i]) if include_labels else None
         cands = candidates_per_obs[i]
 
-        # Is GT arc in candidates?
-        cand_arc_ids = {c[0] for c in cands}
-        gt_in_cands = gt_arc in cand_arc_ids
-
-        if not gt_in_cands:
-            miss_obs.append(i)
+        if include_labels:
+            # Is GT arc in candidates?
+            cand_arc_ids = {c[0] for c in cands}
+            gt_in_cands = gt_arc in cand_arc_ids
+            if not gt_in_cands:
+                miss_obs.append(i)
 
         for arc_id, snap_dist, snap_t in cands:
             from_id, to_id = arcs[arc_id]
@@ -165,9 +175,7 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
             od = out_deg.get(to_id, 0)
             ind = in_deg.get(from_id, 0)
 
-            label = int(arc_id == gt_arc)
-
-            rows.append({
+            row = {
                 "trip_id": trip_id,
                 "obs_index": np.int32(i),
                 "arc_id": np.int32(arc_id),
@@ -185,16 +193,18 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
                 "is_gap_prev": np.int8(is_gap_prev[i]),
                 "is_gap_next": np.int8(is_gap_next[i]),
                 "heading_reliable": np.int8(heading_reliable[i]),
-                "label": np.int8(label),
-                "is_gt_in_candidates": gt_in_cands,
-            })
+            }
+            if include_labels:
+                row["label"] = np.int8(arc_id == gt_arc)
+                row["is_gt_in_candidates"] = gt_in_cands
+            rows.append(row)
 
     if not rows:
         # Return empty DataFrame with correct schema
-        return _empty_schema_df()
+        return _empty_schema_df(include_labels=include_labels)
 
     df = pd.DataFrame(rows)
-    df = df.astype({
+    dtypes = {
         "trip_id": "object",
         "obs_index": "int32",
         "arc_id": "int32",
@@ -212,22 +222,29 @@ def build_trip_features(trip_id, trip_dir, radius=50.0):
         "is_gap_prev": "int8",
         "is_gap_next": "int8",
         "heading_reliable": "int8",
-        "label": "int8",
-        "is_gt_in_candidates": "bool",
-    })
+    }
+    if include_labels:
+        dtypes.update({"label": "int8", "is_gt_in_candidates": "bool"})
+    df = df.astype(dtypes)
 
     return df
 
 
-def _empty_schema_df():
+def build_trip_inference_features(trip_id, trip_dir, radius=50.0):
+    """Generate model-ready candidates without reading or producing labels."""
+    return build_trip_features(trip_id, trip_dir, radius=radius, include_labels=False)
+
+
+def _empty_schema_df(include_labels=True):
     """Return an empty DataFrame with the correct Phase 1 schema."""
-    return pd.DataFrame(columns=[
+    columns = [
         "trip_id", "obs_index", "arc_id", "snap_distance_m", "snap_t",
         "arc_length_m", "bearing_diff_rad", "abs_bearing_diff_rad",
         "gps_speed_mps", "gps_heading_rad", "dt_prev_s", "dt_next_s",
         "out_degree", "in_degree", "is_gap_prev", "is_gap_next",
-        "heading_reliable", "label", "is_gt_in_candidates",
-    ]).astype({
+        "heading_reliable",
+    ]
+    dtypes = {
         "trip_id": "object",
         "obs_index": "int32",
         "arc_id": "int32",
@@ -245,9 +262,11 @@ def _empty_schema_df():
         "is_gap_prev": "int8",
         "is_gap_next": "int8",
         "heading_reliable": "int8",
-        "label": "int8",
-        "is_gt_in_candidates": "bool",
-    })
+    }
+    if include_labels:
+        columns.extend(["label", "is_gt_in_candidates"])
+        dtypes.update({"label": "int8", "is_gt_in_candidates": "bool"})
+    return pd.DataFrame(columns=columns).astype(dtypes)
 
 
 # ---------------------------------------------------------------------------

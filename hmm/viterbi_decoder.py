@@ -6,6 +6,10 @@ def viterbi_decode(candidates, log_emissions, log_transitions):
 
     if not candidates or any(not states for states in candidates):
         raise ValueError("Candidate states cannot be empty")
+    if len(log_emissions) != len(candidates):
+        raise ValueError("Each candidate observation must have one emission map")
+    if isinstance(log_transitions, (list, tuple)) and len(log_transitions) != len(candidates) - 1:
+        raise ValueError("A per-step transition map is required for each adjacent observation pair")
 
     # Initialization
     scores = {}
@@ -25,9 +29,10 @@ def viterbi_decode(candidates, log_emissions, log_transitions):
             best_score = float("-inf")
             best_previous = None
 
+            transition_map = log_transitions[t - 1] if isinstance(log_transitions, (list, tuple)) else log_transitions
             for previous in candidates[t - 1]:
 
-                transition = log_transitions.get(
+                transition = transition_map.get(
                     (previous, current), float("-inf")
                 )
 
