@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_DIR = Path(os.environ.get("PATHSNAP_ARTIFACTS", REPO_ROOT / "artifacts"))
 SAMPLE_ROOT = Path(os.environ.get("PATHSNAP_SAMPLE_ROOT", REPO_ROOT / "data" / "raw" / "Student folder"))
-SAMPLE_PARTITIONS = ("train", "student_test")  # evaluator data is never served
+SAMPLE_PARTITIONS = ("evaluator_test", "student_test", "train")
 REQUIRED = ("track", "nodes", "arcs")
 
 STATE: dict = {"matcher": None}
@@ -76,6 +76,37 @@ def _build_result(trip_id: str, data: dict) -> dict:
     n_obs = len(track)
     matched = [i for i, a in enumerate(res.obs_arc) if a is not None]
     elapsed = time.perf_counter() - t0
+
+    # Calculate server-side reference accuracy if reference route is available
+    # (Reference route is never passed to or seen by the prediction pipeline)
+    ref_route = data.get("route")
+    if ref_route is None:
+        for part in SAMPLE_PARTITIONS:
+            rf = SAMPLE_ROOT / part / trip_id / f"{trip_id}.route"
+            if rf.is_file():
+                try:
+                    from src.data.loader import load_route
+                    ref_route = load_route(str(SAMPLE_ROOT / part / trip_id))
+                    break
+                except Exception:
+                    pass
+
+    ref_accuracy = None
+    ml_top1_acc = None
+    if ref_route is not None and len(ref_route) > 0:
+        try:
+            from src.utils.geometry import build_projection
+            from src.data.alignment import align_observations
+            proj = build_projection(track)
+            _, gt = align_observations(track, nodes, arcs, ref_route, proj)
+            if len(gt) == n_obs:
+                correct_hmm = sum(1 for p, g in zip(res.obs_arc, gt) if p == g and g is not None)
+                ref_accuracy = float(correct_hmm / n_obs)
+                correct_ml = sum(1 for m, g in zip(out["ml_top1"], gt) if m == g and g is not None)
+                ml_top1_acc = float(correct_ml / n_obs)
+        except Exception as exc:
+            log.warning("could not compute reference accuracy for %s: %s", trip_id, exc)
+
     return {
         "trip_id": trip_id,
         "status": "completed",
@@ -97,6 +128,8 @@ def _build_result(trip_id: str, data: dict) -> dict:
             "mean_candidates_per_obs": sum(len(c) for c in out["candidates"]) / max(n_obs, 1),
             "processing_time_seconds": elapsed,
             "stage_seconds": out["timing_s"],
+            "reference_accuracy": ref_accuracy,
+            "ml_top1_accuracy": ml_top1_acc,
         },
     }
 

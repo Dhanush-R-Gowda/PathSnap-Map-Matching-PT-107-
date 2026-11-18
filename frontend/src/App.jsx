@@ -149,6 +149,13 @@ function App() {
               <div className="stat-card"><p>Route distance</p><h2>{km(m.route_distance_m)}</h2><small>{m.route_arcs} road segments</small></div>
               <div className="stat-card"><p>Route continuity</p><h2>{(m.route_continuity * 100).toFixed(1)}%</h2><small>{m.chain_breaks} chain breaks</small></div>
               <div className="stat-card"><p>Processing time</p><h2>{m.processing_time_seconds.toFixed(1)} s</h2><small>{m.mean_candidates_per_obs.toFixed(1)} candidates / obs</small></div>
+              {m.reference_accuracy != null && (
+                <div className="stat-card stat-highlight">
+                  <p>Evaluation accuracy</p>
+                  <h2>{(m.reference_accuracy * 100).toFixed(1)}%</h2>
+                  <small>ML top-1: {(m.ml_top1_accuracy * 100).toFixed(1)}%</small>
+                </div>
+              )}
             </section>
           )}
 

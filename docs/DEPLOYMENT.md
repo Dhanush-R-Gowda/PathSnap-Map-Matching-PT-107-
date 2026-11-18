@@ -8,8 +8,14 @@
 ## Laptop 1 (backend)
 
 1. Install Python deps: `pip install -r requirements.txt`.
-2. Ensure `artifacts/best_model.pkl` and `artifacts/feature_schema.json` exist
-   (committed, or regenerate with `python -m src.models.run_phase2`).
+2. Generate the model artifacts on Laptop 1 (they are gitignored, so they must be
+   produced locally):
+   `python -m src.models.run_phase2 --trials 5 --seed 42`.
+   This writes `artifacts/best_model.pkl`, `artifacts/feature_schema.json`,
+   `artifacts/model_metadata.json`, `artifacts/preprocessing_pipeline.pkl` and
+   `artifacts/best_hyperparameters.json`. Copy the whole `artifacts/` directory
+   to Laptop 1 if training was done elsewhere, or point `PATHSNAP_ARTIFACTS` at
+   its location.
 3. Start: `python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000`.
    The model is loaded **once at startup** (see the `model loaded ...` log line).
 4. Find its LAN IP (`ipconfig` on Windows / `ipconfig getifaddr en0` on macOS) and allow

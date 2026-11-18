@@ -1,0 +1,125 @@
+{
+  "summary": {
+    "partition": "student_test",
+    "trips": 10,
+    "observations": 19160,
+    "ml_top1": 0.8193632567849687,
+    "hmm_top1": 0.876356993736952,
+    "candidate_miss_rate": 0.0014091858037578288,
+    "mean_ml_continuity": 0.2534466551226206,
+    "mean_hmm_continuity": 0.9999286733238231,
+    "mean_runtime_s": 2.962957645802817
+  },
+  "per_trip": [
+    {
+      "trip_id": "00000000",
+      "n_obs": 2503,
+      "ml_top1": 0.9348781462245306,
+      "hmm_top1": 0.9464642429085098,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.08992805755395683,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 6.545889042012277
+    },
+    {
+      "trip_id": "00000007",
+      "n_obs": 1354,
+      "ml_top1": 0.9091580502215657,
+      "hmm_top1": 0.8537666174298375,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.18994826311899482,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 0.5134052079956746
+    },
+    {
+      "trip_id": "00000009",
+      "n_obs": 1049,
+      "ml_top1": 0.8045757864632984,
+      "hmm_top1": 0.894184938036225,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.31583969465648853,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 3.3664677499909885
+    },
+    {
+      "trip_id": "00000040",
+      "n_obs": 2995,
+      "ml_top1": 0.8874791318864774,
+      "hmm_top1": 0.9482470784641068,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.20741482965931865,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 2.056166792011936
+    },
+    {
+      "trip_id": "00000052",
+      "n_obs": 262,
+      "ml_top1": 0.9465648854961832,
+      "hmm_top1": 0.9961832061068703,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.24904214559386972,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 0.20110900000145193
+    },
+    {
+      "trip_id": "00000056",
+      "n_obs": 3958,
+      "ml_top1": 0.8527033855482566,
+      "hmm_top1": 0.9345629105608894,
+      "miss_rate": 0.006821627084386054,
+      "ml_continuity": 0.2805155420773313,
+      "hmm_continuity": 0.9992867332382311,
+      "breaks": 1,
+      "runtime_s": 5.3814085830090335
+    },
+    {
+      "trip_id": "00000065",
+      "n_obs": 768,
+      "ml_top1": 0.7825520833333334,
+      "hmm_top1": 0.8606770833333334,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.24119947848761408,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 1.33146408299217
+    },
+    {
+      "trip_id": "00000076",
+      "n_obs": 1486,
+      "ml_top1": 0.8135935397039031,
+      "hmm_top1": 0.9091520861372813,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.2673400673400673,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 4.081627624997054
+    },
+    {
+      "trip_id": "00000077",
+      "n_obs": 3911,
+      "ml_top1": 0.6353873689593454,
+      "hmm_top1": 0.7062132446944516,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.4263427109974425,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 4.109690709010465
+    },
+    {
+      "trip_id": "00000091",
+      "n_obs": 874,
+      "ml_top1": 0.8100686498855835,
+      "hmm_top1": 0.8627002288329519,
+      "miss_rate": 0.0,
+      "ml_continuity": 0.26689576174112256,
+      "hmm_continuity": 1.0,
+      "breaks": 0,
+      "runtime_s": 2.0423476660071174
+    }
+  ]
+}

@@ -116,12 +116,16 @@ The backend must distinguish between training and evaluator inference.
 
 ## 6. Integration Status
 
-The following interfaces are still proposed and require confirmation from the respective teammates:
+All interfaces are implemented and wired end to end:
 
-- Candidate-generation and feature-extraction function from the data-processing module.
-- Model-loading and probability-prediction function from the ML module.
-- HMM decoding function and reconstructed-route output format.
-- Road geometry format required for map visualization.
+- `src.features.build_features.build_trip_features_inference` generates candidates
+  and the 14 model features without any ground-truth `.route` file.
+- `src.models.phase2.load_model` / `predict_candidate_probabilities` load the
+  saved pipeline and return per-observation-normalised candidate probabilities.
+- `src.decoder.hmm_matcher.decode` consumes those probabilities and returns the
+  matched arcs, connected arc sequence and reported breaks/unmatched observations.
+- `src.pipeline.PathSnapMatcher` composes the three stages; `backend/main.py`
+  serialises the route as GeoJSON-style `{lat, lon}` points for the Leaflet UI.
 
 ## 7. Frontend Response Requirements
 

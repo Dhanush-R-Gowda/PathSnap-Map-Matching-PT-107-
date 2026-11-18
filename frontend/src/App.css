@@ -589,4 +589,6 @@ footer {
 .map-loading { position: absolute; z-index: 1000; inset: 0; display: grid; place-items: center; background: rgba(255,255,255,.7); font-weight: 600; }
 select { width: 100%; padding: 8px; border-radius: 6px; margin: 6px 0; }
 .stat-card h2 { color: #1b2540 !important; opacity: 1 !important; }
+.stat-highlight { border-color: #159b68 !important; background: #f4fbf8 !important; }
+.stat-highlight h2 { color: #159b68 !important; }
 .file-row input { max-width: 190px; }

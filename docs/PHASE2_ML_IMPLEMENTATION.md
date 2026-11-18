@@ -38,24 +38,24 @@ Training and inference times in the comparison are cumulative seconds over the f
 
 | model | CV Macro F1 | Top-1 Accuracy | Log Loss | Candidate Miss Rate | Route Continuity | CV Training Time (s) | CV Inference Time (s) |
 |---|---|---|---|---|---|---|---|
-| lightgbm | 0.8689 | 0.7957 | 0.1148 | 0.1434 | 0.3050 | 59.4504 | 6.4533 |
-| random_forest | 0.8585 | 0.7993 | 0.1217 | 0.1434 | 0.3090 | 309.8877 | 4.0730 |
-| logistic_regression | 0.7856 | 0.7674 | 0.1772 | 0.1434 | 0.3093 | 14.0054 | 0.2861 |
-| shallow_mlp | 0.8498 | 0.7793 | 0.1291 | 0.1434 | 0.3065 | 220.2545 | 0.4274 |
-| gaussian_naive_bayes | 0.7861 | 0.7576 | 0.3886 | 0.1434 | 0.3092 | 10.5383 | 0.5377 |
+| lightgbm | 0.8689 | 0.7957 | 0.1148 | 0.1434 | 0.3050 | 66.2875 | 5.2622 |
+| random_forest | 0.8583 | 0.7994 | 0.1217 | 0.1434 | 0.3084 | 276.9739 | 3.6366 |
+| logistic_regression | 0.7856 | 0.7674 | 0.1772 | 0.1434 | 0.3093 | 12.7917 | 0.2136 |
+| shallow_mlp | 0.8497 | 0.7792 | 0.1291 | 0.1434 | 0.3065 | 122.8338 | 0.3252 |
+| gaussian_naive_bayes | 0.7861 | 0.7576 | 0.3886 | 0.1434 | 0.3092 | 10.5698 | 0.3241 |
 
 Selected baseline: **random_forest**. Selection uses a weighted mean of percentile ranks: Top-1 Accuracy (0.23), candidate Macro F1 (0.23), route continuity (0.18), candidate Log Loss (0.14), Macro F1 fold stability (0.10), five-fold training time (0.07), and inference time (0.05). Lower Log Loss, variability, and both time measures rank higher. The selection details and per-metric ranks are saved in `results/model_comparison.json`.
 
 ## Bayesian optimization
 
-Optuna TPESampler ran 5 trials on the selected model with seed 42 (2 startup trials followed by 3 adaptive suggestions). The objective is mean five-fold GroupKFold candidate-level Log Loss on eligible validation observations; each trial also records Top-1 Accuracy. Best CV Log Loss: 0.119532; best trial: 4; Top-1 on best trial: 0.7938847432214045.
+Optuna TPESampler ran 5 trials on the selected model with seed 42 (2 startup trials followed by 3 adaptive suggestions). The objective is mean five-fold GroupKFold candidate-level Log Loss on eligible validation observations; each trial also records Top-1 Accuracy. Best CV Log Loss: 0.119510; best trial: 4; Top-1 on best trial: 0.793894428876689.
 
 The complete trial history is in `results/optimization_trials.csv`; best parameters are in `results/best_hyperparameters.json`. `results/tuned_vs_untuned.csv` compares baseline and tuned CV performance on the same folds.
 
 | configuration | macro_f1_mean | top1_accuracy_mean | log_loss_mean | route_continuity_pooled | training_time_s | inference_time_s |
 |---|---|---|---|---|---|---|
-| untuned_baseline | 0.8585 | 0.7993 | 0.1217 | 0.3090 | 309.8877 | 4.0730 |
-| tuned | 0.8609 | 0.7939 | 0.1195 | 0.3068 | 795.7638 | 2.8814 |
+| untuned_baseline | 0.8583 | 0.7994 | 0.1217 | 0.3084 | 276.9739 | 3.6366 |
+| tuned | 0.8609 | 0.7939 | 0.1195 | 0.3067 | 597.8746 | 1.8893 |
 
 ## Probability quality and HMM interface
 
@@ -74,15 +74,15 @@ probabilities = pd.read_parquet('results/prediction_probabilities/student_test_c
 
 The selected tuned estimator was fitted only on eligible training observations from the 80 training trips. Student-test labels were used once for the requested final evaluation and not for model selection or optimization.
 
-Metrics: Top-1 Accuracy 0.8206240526838446; candidate Macro F1 0.8792235532061812; candidate Log Loss 0.09828066101076069; candidate miss rate 0.0014091858037578288; route continuity 0.26511749347258484; Brier Score 0.028835102857761048; expected calibration error 0.005487101067963079; final-model training time 215.088s; student-test inference time 1.187s.
+Metrics: Top-1 Accuracy 0.8205195212460148; candidate Macro F1 0.879169922774052; candidate Log Loss 0.09827738624291396; candidate miss rate 0.0014091858037578288; route continuity 0.2658485639686684; Brier Score 0.028836385003527646; expected calibration error 0.005283801982325837; final-model training time 151.861s; student-test inference time 1.079s.
 
 ## Saved artifacts
 
-- `best_model`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\best_model.pkl`
-- `preprocessing_pipeline`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\preprocessing_pipeline.pkl`
-- `feature_schema`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\feature_schema.json`
-- `model_metadata`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\model_metadata.json`
-- `best_hyperparameters`: `C:\Users\cheth\Downloads\ml_hackathon\artifacts\best_hyperparameters.json`
+- `best_model`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/best_model.pkl`
+- `preprocessing_pipeline`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/preprocessing_pipeline.pkl`
+- `feature_schema`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/feature_schema.json`
+- `model_metadata`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/model_metadata.json`
+- `best_hyperparameters`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/best_hyperparameters.json`
 
 ## Limitations
 

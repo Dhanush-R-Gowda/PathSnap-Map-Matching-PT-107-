@@ -268,3 +268,6 @@ frontend/.vite/
 
 # Local backend uploads
 backend/uploads/
+
+# Local pre-training snapshots (generated artifacts, not source)
+backups/

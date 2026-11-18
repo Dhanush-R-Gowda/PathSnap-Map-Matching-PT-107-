@@ -1,16 +1,36 @@
-# React + Vite
+# PathSnap evaluator dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + Vite + Leaflet frontend for the PathSnap FastAPI backend. The dashboard
+lets an evaluator connect to a backend, select demo trips or upload
+`.track`/`.nodes`/`.arcs` files, run reconstruction and inspect the GPS track,
+the reconstructed route and quality metrics on a map. No ground-truth `.route`
+file is used or accepted.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev            # dev server on http://localhost:5173 (host 0.0.0.0)
+npm run build          # production bundle in dist/
+npm run lint           # Oxlint
+```
 
-## React Compiler
+## Backend configuration
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The backend URL is resolved in this order:
 
-## Expanding the Oxlint configuration
+1. `VITE_API_URL` at build time (e.g. `VITE_API_URL=http://192.168.1.5:8000 npm run build`),
+2. the URL saved in the browser from the *Backend* input (`localStorage`),
+3. `http://<current-host>:8000`.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The backend must be running (`python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000`)
+and its model artifacts generated. See the root `README.md` and `docs/DEPLOYMENT.md`.
+
+## API used
+
+`GET /health`, `GET /api/v1/samples`,
+`POST /api/v1/samples/{partition}/{id}/load`,
+`POST /api/v1/trips/upload`, `POST /api/v1/trips/{id}/predict`,
+`GET /api/v1/trips/{id}/results`, `GET /api/v1/trips`.
+The request/response shapes are defined by `backend/main.py`; loading, error and
+empty-result states are handled in `src/App.jsx` and `src/api.js`.
