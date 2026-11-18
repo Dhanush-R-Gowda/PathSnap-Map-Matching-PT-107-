@@ -46,8 +46,34 @@ Team members and responsibilities will be added here.
 
 ## Installation
 
-Instructions will be added after dependencies are finalised.
+Use Python 3.12 and install the pinned-range project dependencies:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+The processed Phase 1 Parquet files are in `data/processed`. The raw files are
+kept out of Git. To run route-continuity evaluation and the Phase 1 tests, extract
+the supplied `Student folder.zip` so `data/raw/Student folder/train` and
+`data/raw/Student folder/student_test` exist. From the repository root:
+
+```powershell
+Expand-Archive -LiteralPath "$env:USERPROFILE\Downloads\Student folder.zip" -DestinationPath "data/raw"
+```
 
 ## Execution
 
-Instructions will be added as components are developed.
+Run the complete Phase 2 workflow from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.models.run_phase2 --trials 5 --seed 42
+.\.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+The command compares five models with five-fold trip-grouped cross-validation,
+optimizes the selected model with Optuna TPE, evaluates the ten student-test
+trips, exports HMM candidate probabilities, and writes reports under `results/`
+and model files under `artifacts/`. Use `--trials N` to change the optimization
+budget. The default is five TPE trials; increase `--trials N` for a larger search.
+Do not point the workflow at evaluator-testing data.

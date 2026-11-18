@@ -1,315 +1,217 @@
-"""Phase 2 pytest tests (14 tests)."""
 
-import os
+"""Unit tests for the Phase 2 candidate-classification workflow."""
+
 import json
+
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.metrics import f1_score, log_loss
 
-# ---------------------------------------------------------------------------
-# Absolute paths
-# ---------------------------------------------------------------------------
-
-REPO_ROOT = "/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-"
-
-TRAIN_PARQUET = os.path.join(REPO_ROOT, "data", "processed", "train_candidates.parquet")
-TEST_PARQUET = os.path.join(REPO_ROOT, "data", "processed", "student_test_candidates.parquet")
-MODEL_COMPARISON_CSV = os.path.join(REPO_ROOT, "results", "experiments", "model_comparison.csv")
-FINAL_MODEL_PATH = os.path.join(REPO_ROOT, "artifacts", "models", "final_model.joblib")
-SCALER_PATH = os.path.join(REPO_ROOT, "artifacts", "models", "scaler.joblib")
-FEATURE_COLUMNS_JSON = os.path.join(REPO_ROOT, "artifacts", "configs", "feature_columns.json")
-TRAIN_PREDICTIONS = os.path.join(REPO_ROOT, "data", "processed", "train_predictions.parquet")
-TEST_PREDICTIONS = os.path.join(REPO_ROOT, "data", "processed", "student_test_predictions.parquet")
-
-EXPECTED_FEATURE_COUNT = 14
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def data():
-    """Load and prepare data once for all tests."""
-    from src.models.data_prep import load_and_prepare
-    return load_and_prepare()
+from src.models.phase2 import (
+    APPROVED_FEATURE_COLUMNS,
+    MODEL_NAMES,
+    TARGET_COLUMN,
+    assert_no_group_leakage,
+    dataset_summary,
+    evaluate_predictions,
+    filter_eligible_observations,
+    get_feature_columns,
+    load_candidate_data,
+    load_model,
+    make_grouped_folds,
+    make_model_pipeline,
+    normalize_candidate_probabilities,
+    predict_candidate_probabilities,
+    save_model_artifacts,
+    sanitize_and_normalize_probabilities,
+    select_model,
+    validate_candidate_frame,
+)
 
 
-# ---------------------------------------------------------------------------
-# Test 1: filtered training set has no rows with is_gt_in_candidates==False
-# ---------------------------------------------------------------------------
+def make_frame(trips=4, observations=4, candidates=2):
+    rows = []
+    for trip_num in range(trips):
+        trip_id = f"{trip_num:08d}"
+        for obs in range(observations):
+            eligible = not (trip_num == trips - 1 and obs == observations - 1)
+            for arc in range(candidates):
+                row = {
+                    "trip_id": trip_id,
+                    "obs_index": obs,
+                    "arc_id": arc,
+                    "label": int(eligible and arc == (obs % candidates)),
+                    "is_gt_in_candidates": eligible,
+                }
+                for ix, feature in enumerate(APPROVED_FEATURE_COLUMNS):
+                    row[feature] = float((trip_num + 1) * (obs + 1) + arc + ix / 10)
+                rows.append(row)
+    frame = pd.DataFrame(rows)
+    return frame[["trip_id", "obs_index", "arc_id", *APPROVED_FEATURE_COLUMNS, "label", "is_gt_in_candidates"]]
 
-def test_01_no_miss_rows_in_train(data):
-    """Filtered train set must contain no rows where is_gt_in_candidates==False."""
-    # Reload parquet and apply the same filter as load_and_prepare
-    df = pd.read_parquet(TRAIN_PARQUET)
-    filtered = df[df["is_gt_in_candidates"] == True]
-    # X_train has exactly the rows from the filtered set
-    assert len(data["X_train"]) == len(filtered), (
-        f"X_train length {len(data['X_train'])} != filtered rows {len(filtered)}"
+
+def test_parquet_loading_and_dataset_summary(tmp_path):
+    frame = make_frame()
+    path = tmp_path / "tiny.parquet"
+    frame.to_parquet(path, index=False)
+    loaded = load_candidate_data(path)
+    assert loaded.shape == frame.shape
+    summary = dataset_summary(loaded, path, {t: 4 for t in loaded.trip_id.unique()})
+    assert summary["trip_count"] == 4
+    assert summary["target_column"] == "label"
+
+
+def test_schema_validation_rejects_missing_and_invalid_targets():
+    frame = make_frame()
+    validate_candidate_frame(frame)
+    with pytest.raises(ValueError, match="missing required columns"):
+        validate_candidate_frame(frame.drop(columns=["arc_id"]))
+    invalid = frame.copy()
+    invalid.loc[0, "label"] = 2
+    with pytest.raises(ValueError, match="target"):
+        validate_candidate_frame(invalid)
+
+
+def test_observation_filter_keeps_all_candidates_for_eligible_groups():
+    frame = make_frame()
+    filtered = filter_eligible_observations(frame)
+    excluded_group = (frame.trip_id.eq("00000003") & frame.obs_index.eq(3))
+    assert not ((filtered.trip_id == "00000003") & (filtered.obs_index == 3)).any()
+    assert len(filtered) == int((~excluded_group).sum())
+    assert (filtered.groupby(["trip_id", "obs_index"]).size() == 2).all()
+    assert (filtered.groupby(["trip_id", "obs_index"]).label.sum() == 1).all()
+
+
+def test_feature_selection_excludes_identifiers_and_targets():
+    frame = make_frame()
+    features = get_feature_columns(frame)
+    assert features == APPROVED_FEATURE_COLUMNS
+    assert not set(features) & {"trip_id", "obs_index", "arc_id", "label", "is_gt_in_candidates"}
+
+
+def test_missing_value_handling_is_fitted_inside_pipeline():
+    frame = make_frame()
+    frame.loc[0, "snap_distance_m"] = np.nan
+    model = make_model_pipeline("logistic_regression", {"max_iter": 30})
+    model.fit(frame[APPROVED_FEATURE_COLUMNS], frame.label)
+    probability = model.predict_proba(frame[APPROVED_FEATURE_COLUMNS])
+    assert np.isfinite(probability).all()
+    imputer = model.named_steps["preprocess"].named_steps["imputer"]
+    assert np.isfinite(imputer.statistics_[0])
+
+
+def test_groupkfold_keeps_trips_separate():
+    frame = make_frame()
+    folds = make_grouped_folds(frame, sorted(frame.trip_id.unique()), n_splits=2)
+    assert len(folds) == 2
+    for fold in folds:
+        assert_no_group_leakage(fold["train_trips"], fold["validation_trips"])
+        assert set(frame.iloc[fold["train_rows"]].trip_id).issubset(set(fold["train_trips"]))
+        assert set(frame.iloc[fold["validation_rows"]].trip_id).issubset(set(fold["validation_trips"]))
+
+
+def test_model_selection_accounts_for_training_and_inference_time():
+    comparison = pd.DataFrame([
+        {
+            "model": "slow", "mean_top1_accuracy": 0.8, "mean_macro_f1": 0.8,
+            "mean_route_continuity": 0.8, "mean_log_loss": 0.2, "std_macro_f1": 0.01,
+            "cv_training_time_s": 100.0, "cv_inference_time_s": 10.0,
+        },
+        {
+            "model": "fast", "mean_top1_accuracy": 0.8, "mean_macro_f1": 0.8,
+            "mean_route_continuity": 0.8, "mean_log_loss": 0.2, "std_macro_f1": 0.01,
+            "cv_training_time_s": 10.0, "cv_inference_time_s": 1.0,
+        },
+    ])
+    name, details = select_model(comparison)
+    assert name == "fast"
+    assert "cv_training_time_s" in details["weights"]
+    assert "cv_inference_time_s" in details["weights"]
+
+
+@pytest.mark.parametrize("model_name", MODEL_NAMES)
+def test_all_five_model_pipelines_fit_and_predict(model_name):
+    frame = make_frame(trips=3, observations=3)
+    params = {
+        "lightgbm": {"n_estimators": 4, "n_jobs": 1},
+        "random_forest": {"n_estimators": 4, "n_jobs": 1},
+        "logistic_regression": {"max_iter": 30},
+        "shallow_mlp": {"max_iter": 5, "batch_size": 16, "n_iter_no_change": 1, "tol": 1e9},
+        "gaussian_naive_bayes": {},
+    }[model_name]
+    model = make_model_pipeline(model_name, params)
+    model.fit(frame[APPROVED_FEATURE_COLUMNS], frame.label)
+    probabilities = model.predict_proba(frame[APPROVED_FEATURE_COLUMNS])
+    assert probabilities.shape == (len(frame), 2)
+    assert np.isfinite(probabilities).all()
+    assert np.allclose(probabilities.sum(axis=1), 1.0)
+
+
+def test_probability_normalization_handles_invalid_and_empty_sets():
+    values = sanitize_and_normalize_probabilities([0.7, 0.2, 0.1])
+    assert np.allclose(values, [0.7, 0.2, 0.1])
+    invalid = sanitize_and_normalize_probabilities([float("nan"), -4.0, float("inf")])
+    assert np.allclose(invalid, [1 / 3] * 3)
+    assert sanitize_and_normalize_probabilities([]).size == 0
+
+    candidates = pd.DataFrame({
+        "trip_id": ["a", "a", "b"],
+        "obs_index": [0, 0, 0],
+        "raw_probability": [0.25, 0.75, np.nan],
+    })
+    normalized = normalize_candidate_probabilities(candidates)
+    assert np.allclose(normalized.groupby(["trip_id", "obs_index"]).probability.sum(), 1.0)
+
+
+def test_metric_calculation_and_trip_scoped_arc_connectivity():
+    frame = pd.DataFrame([
+        {"trip_id": "trip_a", "obs_index": 0, "arc_id": 0, "label": 1, "is_gt_in_candidates": True},
+        {"trip_id": "trip_a", "obs_index": 0, "arc_id": 2, "label": 0, "is_gt_in_candidates": True},
+        {"trip_id": "trip_a", "obs_index": 1, "arc_id": 1, "label": 1, "is_gt_in_candidates": True},
+        {"trip_id": "trip_a", "obs_index": 1, "arc_id": 3, "label": 0, "is_gt_in_candidates": True},
+    ])
+    truth = frame.label.to_numpy()
+    probs = np.array([0.9, 0.1, 0.8, 0.2])
+    context = {"trip_a": {"observation_count": 3, "arcs": [(0, 1), (1, 2), (7, 8), (8, 9)]}}
+    metrics = evaluate_predictions(frame, probs, context)
+    assert metrics["top1_accuracy"] == 1.0
+    assert metrics["macro_f1"] == f1_score(truth, probs >= 0.5, average="macro")
+    assert metrics["log_loss"] == pytest.approx(log_loss(truth, probs, labels=[0, 1]))
+    assert metrics["candidate_miss_rate"] == pytest.approx(1 / 3)
+    assert metrics["route_continuity"] == 1.0
+    assert metrics["expected_calibration_error"] is not None
+
+
+def test_candidate_mapping_preserves_trip_and_empty_observation(tmp_path):
+    frame = make_frame(trips=3, observations=3)
+    model = make_model_pipeline("logistic_regression", {"max_iter": 30})
+    model.fit(frame[APPROVED_FEATURE_COLUMNS], frame.label)
+    subset = frame[(frame.trip_id == "00000000") & (frame.obs_index < 2)].copy()
+    expected = pd.DataFrame({"trip_id": ["00000000"] * 3, "obs_index": [0, 1, 2]})
+    predicted, records = predict_candidate_probabilities(model, subset, APPROVED_FEATURE_COLUMNS, expected)
+    assert predicted.groupby(["trip_id", "obs_index"]).probability.sum().to_numpy() == pytest.approx([1.0, 1.0])
+    assert [r["observation_id"] for r in records] == [0, 1, 2]
+    assert records[-1]["candidates"] == []
+    assert all(r["trip_id"] == "00000000" for r in records)
+    assert all(sum(c["probability"] for c in r["candidates"]) == pytest.approx(1.0) for r in records[:2])
+
+
+def test_model_artifact_saving_and_loading_is_prediction_consistent(tmp_path):
+    frame = make_frame(trips=3, observations=3)
+    model = make_model_pipeline("logistic_regression", {"max_iter": 30})
+    model.fit(frame[APPROVED_FEATURE_COLUMNS], frame.label)
+    before = model.predict_proba(frame[APPROVED_FEATURE_COLUMNS])
+    paths = save_model_artifacts(
+        model,
+        APPROVED_FEATURE_COLUMNS,
+        "logistic_regression",
+        {"C": 1.0},
+        {"random_seed": 42},
+        tmp_path,
     )
-    # Also check that no False rows leaked through
-    assert data["X_train"].shape[0] > 0, "X_train is empty after filtering"
-
-
-# ---------------------------------------------------------------------------
-# Test 2: all 14 feature columns present in X_train
-# ---------------------------------------------------------------------------
-
-def test_02_fourteen_feature_columns(data):
-    """X_train must have exactly 14 feature columns."""
-    from src.models.data_prep import FEATURE_COLUMNS
-    assert len(FEATURE_COLUMNS) == EXPECTED_FEATURE_COUNT, (
-        f"Expected {EXPECTED_FEATURE_COUNT} feature columns, got {len(FEATURE_COLUMNS)}"
-    )
-    assert data["X_train"].shape[1] == EXPECTED_FEATURE_COUNT, (
-        f"X_train has {data['X_train'].shape[1]} columns, expected {EXPECTED_FEATURE_COUNT}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 3: groups array has same length as X_train
-# ---------------------------------------------------------------------------
-
-def test_03_groups_length_matches_x_train(data):
-    """groups_train must be aligned with X_train."""
-    assert len(data["groups_train"]) == len(data["X_train"]), (
-        f"groups_train length {len(data['groups_train'])} != X_train length {len(data['X_train'])}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 4: CV framework — no trip appears in both train and val folds
-# ---------------------------------------------------------------------------
-
-def test_04_no_trip_leakage_in_cv(data):
-    """No trip_id should appear in both train and validation folds for any CV split."""
-    from sklearn.model_selection import GroupKFold
-    gkf = GroupKFold(n_splits=5)
-    X = data["X_train"]
-    y = data["y_train"]
-    groups = data["groups_train"]
-
-    for fold_idx, (train_idx, val_idx) in enumerate(gkf.split(X, y, groups)):
-        train_trips = set(groups[train_idx])
-        val_trips = set(groups[val_idx])
-        overlap = train_trips & val_trips
-        assert len(overlap) == 0, (
-            f"Fold {fold_idx}: trips {overlap} appear in both train and val"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 5: scaler is NOT fitted on full dataset (each fold fits its own scaler)
-# ---------------------------------------------------------------------------
-
-def test_05_scaler_fitted_per_fold(data):
-    """Verify that the CV cross_validate_model function creates a fresh StandardScaler
-    per fold and does NOT use a pre-fitted scaler from the full dataset."""
-    # We test this structurally: inspect the source of cross_validate_model to confirm
-    # a new StandardScaler() is instantiated inside the fold loop.
-    import inspect
-    from src.models.evaluation import cross_validate_model
-    source = inspect.getsource(cross_validate_model)
-    assert "StandardScaler()" in source, (
-        "cross_validate_model should instantiate StandardScaler() inside the fold loop"
-    )
-    assert "scaler.fit_transform(X_tr" in source or "fit_transform(X_tr" in source, (
-        "Scaler should be fit only on X_tr (training fold data)"
-    )
-    # Confirm it does NOT fit on X (full data) before the fold loop
-    # The function should NOT call fit before 'for fold_idx'
-    lines = source.split("\n")
-    in_loop = False
-    for line in lines:
-        stripped = line.strip()
-        if "for fold_idx" in stripped or "for train_idx" in stripped:
-            in_loop = True
-        if not in_loop and "scaler.fit" in stripped:
-            pytest.fail(
-                "StandardScaler.fit() called before the fold loop in cross_validate_model"
-            )
-
-
-# ---------------------------------------------------------------------------
-# Test 6: model_comparison.csv exists and has exactly 5 rows
-# ---------------------------------------------------------------------------
-
-def test_06_model_comparison_csv_exists_with_five_rows():
-    """model_comparison.csv must exist and have exactly 5 model rows."""
-    assert os.path.exists(MODEL_COMPARISON_CSV), (
-        f"model_comparison.csv not found at {MODEL_COMPARISON_CSV}"
-    )
-    df = pd.read_csv(MODEL_COMPARISON_CSV)
-    assert len(df) == 5, (
-        f"model_comparison.csv has {len(df)} rows, expected 5"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 7: artifacts/models/final_model.joblib exists and can be loaded
-# ---------------------------------------------------------------------------
-
-def test_07_final_model_loadable():
-    """final_model.joblib must exist and be loadable with joblib."""
-    assert os.path.exists(FINAL_MODEL_PATH), (
-        f"final_model.joblib not found at {FINAL_MODEL_PATH}"
-    )
-    import joblib
-    model = joblib.load(FINAL_MODEL_PATH)
-    assert hasattr(model, "predict"), "Loaded object is not a valid sklearn-compatible model"
-
-
-# ---------------------------------------------------------------------------
-# Test 8: artifacts/models/scaler.joblib exists and can be loaded
-# ---------------------------------------------------------------------------
-
-def test_08_scaler_loadable():
-    """scaler.joblib must exist and be loadable with joblib."""
-    assert os.path.exists(SCALER_PATH), (
-        f"scaler.joblib not found at {SCALER_PATH}"
-    )
-    import joblib
-    from sklearn.preprocessing import StandardScaler
-    scaler = joblib.load(SCALER_PATH)
-    assert isinstance(scaler, StandardScaler), (
-        f"Loaded scaler is {type(scaler)}, expected StandardScaler"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 9: feature_columns.json lists exactly 14 columns
-# ---------------------------------------------------------------------------
-
-def test_09_feature_columns_json_has_14_entries():
-    """feature_columns.json must exist and list exactly 14 feature column names."""
-    assert os.path.exists(FEATURE_COLUMNS_JSON), (
-        f"feature_columns.json not found at {FEATURE_COLUMNS_JSON}"
-    )
-    with open(FEATURE_COLUMNS_JSON) as fh:
-        cols = json.load(fh)
-    assert isinstance(cols, list), "feature_columns.json should contain a JSON array"
-    assert len(cols) == EXPECTED_FEATURE_COUNT, (
-        f"feature_columns.json has {len(cols)} entries, expected {EXPECTED_FEATURE_COUNT}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 10: train_predictions.parquet exists with required columns
-# ---------------------------------------------------------------------------
-
-def test_10_train_predictions_schema():
-    """train_predictions.parquet must exist with correct columns."""
-    assert os.path.exists(TRAIN_PREDICTIONS), (
-        f"train_predictions.parquet not found at {TRAIN_PREDICTIONS}"
-    )
-    df = pd.read_parquet(TRAIN_PREDICTIONS)
-    required = {"trip_id", "obs_index", "arc_id", "prob_positive", "is_gt_in_candidates"}
-    missing = required - set(df.columns)
-    assert len(missing) == 0, f"train_predictions.parquet missing columns: {missing}"
-
-
-# ---------------------------------------------------------------------------
-# Test 11: student_test_predictions.parquet exists with required columns
-# ---------------------------------------------------------------------------
-
-def test_11_student_test_predictions_schema():
-    """student_test_predictions.parquet must exist with correct columns."""
-    assert os.path.exists(TEST_PREDICTIONS), (
-        f"student_test_predictions.parquet not found at {TEST_PREDICTIONS}"
-    )
-    df = pd.read_parquet(TEST_PREDICTIONS)
-    required = {"trip_id", "obs_index", "arc_id", "prob_positive", "is_gt_in_candidates"}
-    missing = required - set(df.columns)
-    assert len(missing) == 0, f"student_test_predictions.parquet missing columns: {missing}"
-
-
-# ---------------------------------------------------------------------------
-# Test 12: all prob_positive values in [0, 1]
-# ---------------------------------------------------------------------------
-
-def test_12_prob_positive_in_range():
-    """All prob_positive values must be in [0.0, 1.0] for both prediction files."""
-    for path, name in [
-        (TRAIN_PREDICTIONS, "train_predictions"),
-        (TEST_PREDICTIONS, "student_test_predictions"),
-    ]:
-        assert os.path.exists(path), f"{name}.parquet not found"
-        df = pd.read_parquet(path)
-        vals = df["prob_positive"].values
-        assert np.all(vals >= 0.0), (
-            f"{name}: found prob_positive < 0: min={vals.min()}"
-        )
-        assert np.all(vals <= 1.0), (
-            f"{name}: found prob_positive > 1: max={vals.max()}"
-        )
-        assert not np.any(np.isnan(vals)), (
-            f"{name}: found NaN in prob_positive"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 13: per (trip_id, obs_index) group: at least one candidate exists
-# ---------------------------------------------------------------------------
-
-def test_13_at_least_one_candidate_per_obs():
-    """Every (trip_id, obs_index) group in both prediction files must have >= 1 row."""
-    for path, name in [
-        (TRAIN_PREDICTIONS, "train_predictions"),
-        (TEST_PREDICTIONS, "student_test_predictions"),
-    ]:
-        assert os.path.exists(path), f"{name}.parquet not found"
-        df = pd.read_parquet(path)
-        counts = df.groupby(["trip_id", "obs_index"]).size()
-        assert (counts >= 1).all(), (
-            f"{name}: some (trip_id, obs_index) groups have 0 candidates"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 14: inference pipeline compatibility
-# ---------------------------------------------------------------------------
-
-def test_14_inference_pipeline_compatibility():
-    """Load scaler + model + feature_columns.json and run predict_proba on synthetic data."""
-    import joblib
-
-    assert os.path.exists(SCALER_PATH), f"scaler.joblib not found at {SCALER_PATH}"
-    assert os.path.exists(FINAL_MODEL_PATH), f"final_model.joblib not found at {FINAL_MODEL_PATH}"
-    assert os.path.exists(FEATURE_COLUMNS_JSON), f"feature_columns.json not found"
-
-    scaler = joblib.load(SCALER_PATH)
-    model = joblib.load(FINAL_MODEL_PATH)
-    with open(FEATURE_COLUMNS_JSON) as fh:
-        feature_columns = json.load(fh)
-
-    assert len(feature_columns) == EXPECTED_FEATURE_COUNT
-
-    # Build a small synthetic DataFrame
-    rng = np.random.default_rng(0)
-    n_rows = 20
-    synthetic = pd.DataFrame(
-        rng.standard_normal((n_rows, len(feature_columns))),
-        columns=feature_columns,
-    )
-    # Boolean columns should be 0/1
-    for col in ("is_gap_prev", "is_gap_next", "heading_reliable"):
-        if col in synthetic.columns:
-            synthetic[col] = rng.integers(0, 2, size=n_rows).astype(float)
-
-    X_synth = synthetic[feature_columns].values
-    X_scaled = scaler.transform(X_synth)
-
-    if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(X_scaled)
-        assert proba.shape == (n_rows, 2), (
-            f"predict_proba output shape {proba.shape}, expected ({n_rows}, 2)"
-        )
-        assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-6), (
-            "predict_proba rows do not sum to 1"
-        )
-    else:
-        preds = model.predict(X_scaled)
-        assert preds.shape == (n_rows,), (
-            f"predict output shape {preds.shape}, expected ({n_rows},)"
-        )
+    loaded = load_model(paths["best_model"])
+    after = loaded.predict_proba(frame[APPROVED_FEATURE_COLUMNS])
+    assert np.allclose(before, after)
+    assert (tmp_path / "preprocessing_pipeline.pkl").is_file()
+    assert json.loads((tmp_path / "feature_schema.json").read_text())["feature_columns"] == APPROVED_FEATURE_COLUMNS
