@@ -1,43 +1,89 @@
 
+"""Log-space Viterbi decoder for PathSnap."""
+
 import math
 
 
-def viterbi_decode(candidates, log_emissions, log_transitions):
+def _validate_log_score(value, description):
+    """Validate a log probability or log score."""
 
-    if not candidates or any(not states for states in candidates):
-        raise ValueError("Candidate states cannot be empty")
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"{description} must be numeric")
+
+    if math.isnan(value) or value == float("inf"):
+        raise ValueError(
+            f"{description} cannot be NaN or positive infinity"
+        )
+
+
+def viterbi_decode(candidates, log_emissions, log_transitions):
+    """Find the most likely sequence of candidate road states."""
+
+    if not candidates:
+        raise ValueError("Candidate observations cannot be empty")
+
+    if any(not states for states in candidates):
+        raise ValueError("At least one observation has no candidates")
+
+    if len(log_emissions) != len(candidates):
+        raise ValueError("Emission count must match observation count")
+
+    if not isinstance(log_transitions, dict):
+        raise TypeError("log_transitions must be a dictionary")
+
+    # Validate emissions
+    for t, states in enumerate(candidates):
+        if len(states) != len(set(states)):
+            raise ValueError(f"Duplicate candidates at observation {t}")
+
+        for state in states:
+            if state not in log_emissions[t]:
+                raise ValueError(
+                    f"Missing emission score for {state} at observation {t}"
+                )
+
+            _validate_log_score(
+                log_emissions[t][state],
+                f"Emission score for {state}"
+            )
 
     # Initialization
-    scores = {}
-    backpointers = [{}]
+    scores = {
+        state: float(log_emissions[0][state])
+        for state in candidates[0]
+    }
 
-    for state in candidates[0]:
-        scores[state] = log_emissions[0][state]
+    backpointers = [{}]
 
     # Dynamic programming
     for t in range(1, len(candidates)):
-
         new_scores = {}
         current_backpointers = {}
 
         for current in candidates[t]:
-
             best_score = float("-inf")
             best_previous = None
 
+            emission = float(log_emissions[t][current])
+
             for previous in candidates[t - 1]:
-
                 transition = log_transitions.get(
-                    (previous, current), float("-inf")
+                    (previous, current),
+                    float("-inf")
                 )
 
-                emission = log_emissions[t][current]
-
-                score = (
-                    scores[previous]
-                    + transition
-                    + emission
+                _validate_log_score(
+                    transition,
+                    f"Transition {previous} -> {current}"
                 )
+
+                if scores[previous] == float("-inf"):
+                    continue
+
+                if transition == float("-inf"):
+                    continue
+
+                score = scores[previous] + transition + emission
 
                 if score > best_score:
                     best_score = score
@@ -60,7 +106,6 @@ def viterbi_decode(candidates, log_emissions, log_transitions):
     path = [last_state]
 
     for t in range(len(candidates) - 1, 0, -1):
-
         previous = backpointers[t][path[-1]]
 
         if previous is None:
@@ -71,39 +116,3 @@ def viterbi_decode(candidates, log_emissions, log_transitions):
     path.reverse()
 
     return path, best_score
-
-
-if __name__ == "__main__":
-
-    candidates = [
-        ["A", "B"],
-        ["B", "C"],
-        ["C", "D"]
-    ]
-
-    # Example log-emission scores
-    log_emissions = [
-        {"A": math.log(0.8), "B": math.log(0.2)},
-        {"B": math.log(0.7), "C": math.log(0.3)},
-        {"C": math.log(0.6), "D": math.log(0.4)}
-    ]
-
-    # Example log-transition scores
-    log_transitions = {
-        ("A", "B"): math.log(0.9),
-        ("A", "C"): math.log(0.1),
-        ("B", "B"): math.log(0.3),
-        ("B", "C"): math.log(0.8),
-        ("B", "D"): math.log(0.1),
-        ("C", "C"): math.log(0.4),
-        ("C", "D"): math.log(0.9)
-    }
-
-    path, score = viterbi_decode(
-        candidates,
-        log_emissions,
-        log_transitions
-    )
-
-    print("Best road sequence:", path)
-    print("Best log score:", score)
