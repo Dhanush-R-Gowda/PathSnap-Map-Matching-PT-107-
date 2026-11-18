@@ -1,120 +1,94 @@
 # PathSnap API Specification
 
-## 1. Overview
+The FastAPI application is implemented in `backend/main.py`. Its default base URL is `http://localhost:8000`; OpenAPI/Swagger is available at `/docs`.
 
-PathSnap is a distributed map-matching and route-reconstruction system that reconstructs realistic vehicle routes from noisy GPS trajectories.
+## Inference data contract
 
-The backend uses FastAPI to receive trip data, coordinate the map-matching pipeline, and return reconstructed routes and evaluation results.
+Route inference accepts `.track`, `.nodes`, and `.arcs`. `.route` is ground truth and is neither required nor read. The API returns route arcs and geometry, but no ground-truth labels or supervised accuracy metrics.
 
-## 2. Technology Stack
+Trip IDs are letters, digits, hyphens, and underscores, up to 80 characters. Packaged trips use their eight-digit ID. Uploaded trips receive an opaque `upload-...` ID.
 
-- Backend: Python, FastAPI
-- Frontend: React
-- Map visualization: Leaflet
-- Data format: JSON
-- Communication: REST API
+## Endpoints
 
+### `GET /health`
 
-## 3. API Endpoints
+Reports whether the API loaded the model and exposes the inference dataset.
 
-The following endpoints are proposed for the initial backend design.
-
-### 3.1 Health Check
-
-- **Method:** GET
-- **Endpoint:** `/health`
-- **Purpose:** Check whether the backend server is running.
-
-**Proposed response:**
-
+```json
 {
   "status": "healthy",
-  "service": "PathSnap API"
+  "service": "PathSnap API",
+  "model_loaded": true,
+  "hmm_available": true,
+  "dataset_available": true,
+  "model_error": null
 }
+```
 
-### 3.2 Upload Trip Files
+When artifacts are missing or incompatible, the endpoint remains available with `status: "degraded"` and a diagnostic `model_error`; inference endpoints return HTTP 503.
 
-- **Method:** POST
-- **Endpoint:** `/api/v1/trips/upload`
-- **Purpose:** Upload the files required to process a trip.
+### `GET /api/model`
 
-**Proposed input files:**
-- `.track` – GPS trajectory observations.
-- `.nodes` – Road network nodes.
-- `.arcs` – Road network arcs.
+Returns metadata read from the saved artifact files: selected model, version, feature count and order, seed, and hyperparameters. Includes a note that candidate scores are not calibrated probabilities.
 
-The `.route` file is ground-truth data and must not be required for normal evaluator inference.
+### `GET /api/trips`
 
-**Proposed response:**
+Returns only trips with `.track`, `.nodes`, and `.arcs` present.
 
+```json
 {
-  "trip_id": "trip_001",
-  "status": "uploaded",
-  "message": "Trip files uploaded successfully"
+  "trips": [
+    { "trip_id": "00000001", "source": "student_test", "uploaded": false }
+  ]
 }
+```
 
-### 3.3 Predict Reconstructed Route
+### `GET /api/trips/{trip_id}`
 
-- **Method:** POST
-- **Endpoint:** `/api/v1/trips/{trip_id}/predict`
-- **Purpose:** Start the map-matching and route-reconstruction pipeline.
+Returns trip preview data: GPS coordinates/timestamps and node, arc, and observation counts. It does not read or return `.route` contents.
 
-**Proposed response:**
+### `POST /api/trips/upload`
 
-{
-  "trip_id": "trip_001",
-  "status": "processing",
-  "message": "Route reconstruction started"
-}
+Multipart fields:
 
-### 3.4 Get Trip Results
+- `track_file`: one `.track`
+- `nodes_file`: one `.nodes`
+- `arcs_file`: one `.arcs`
 
-- **Method:** GET
-- **Endpoint:** `/api/v1/trips/{trip_id}/results`
-- **Purpose:** Retrieve the reconstructed route and processing results.
+Each file is limited to 25 MiB. The backend assigns a new ID, parses the files, verifies coordinates, timestamp ordering, and arc node references, then stores the trip under ignored `backend/uploads/`. Ground-truth `.route` uploads are not accepted.
 
-**Proposed response:**
+### `POST /api/map-match`
 
-{
-  "trip_id": "trip_001",
-  "status": "completed",
-  "reconstructed_route": [],
-  "processing_time_seconds": 0.0
-}
+JSON request:
 
-### 3.5 List Trips
+```json
+{ "trip_id": "00000001" }
+```
 
-- **Method:** GET
-- **Endpoint:** `/api/v1/trips`
-- **Purpose:** Retrieve the list of uploaded and processed trips.
+The endpoint generates route-free Phase 1 features, loads the existing fitted model, normalizes scores per observation, and applies the HMM/Viterbi decoder. The response includes:
 
-## 4. Backend Processing Workflow
+- `gps_coordinates`
+- `classifier_route.arc_ids_by_observation` and route `segments`
+- `hmm_route.arc_ids_by_observation` and route `segments`
+- sampled `candidate_road_segments`
+- candidate coverage, route continuity, route-distance estimates, and processing time
+- model metadata, warnings, decoder status, and `folium_map_url`
 
-After receiving the trip files, the backend will coordinate the following stages:
+Arc IDs are trip-local. Geometry coordinates are `[latitude, longitude]` pairs. `null` arc IDs indicate an observation that has no candidate or was not decoded.
 
-1. **File Validation:** Check that the required `.track`, `.nodes`, and `.arcs` files are available and valid.
-2. **Data Preprocessing:** Prepare GPS observations and road-network information.
-3. **Candidate Generation:** Generate possible road arcs for each GPS observation.
-4. **Feature Extraction:** Calculate the features required by the trained ML model.
-5. **ML Prediction:** Obtain candidate-level prediction scores or probabilities.
-6. **HMM Decoding:** Use the prediction scores to reconstruct a connected road route.
-7. **Result Preparation:** Prepare the reconstructed route and relevant metrics for the frontend.
-8. **Map Visualization:** Display the original GPS trajectory and reconstructed route.
+### `POST /api/v1/trips/{trip_id}/predict`
 
-## 5. Training Data vs. Inference Data
+Path-based alias for route matching; it returns the same synchronous result.
 
-The backend must distinguish between training and evaluator inference.
+### `GET /api/trips/{trip_id}/results`
 
-### Training
-- Uses training trip data and ground-truth `.route` files.
-- Ground-truth information is used for generating labels and evaluating models.
+Returns the latest result generated by this API process. Results are cached in memory and are cleared when the server restarts.
 
-### Evaluator Inference
-- Uses only the available `.track`, `.nodes`, and `.arcs` files.
-- Must not depend on the ground-truth `.route` file.
-- Returns the reconstructed route produced by the pipeline.
+### `GET /api/trips/{trip_id}/map`
 
-## 6. Integration Status
+Returns the generated Folium HTML map. Run map matching first.
+
+## Integration Status
 
 All interfaces are implemented and wired end to end:
 
@@ -127,74 +101,24 @@ All interfaces are implemented and wired end to end:
 - `src.pipeline.PathSnapMatcher` composes the three stages; `backend/main.py`
   serialises the route as GeoJSON-style `{lat, lon}` points for the Leaflet UI.
 
-## 7. Frontend Response Requirements
+## Metric definitions
 
-The frontend will use backend responses to display the trip-processing status and reconstructed route.
+- **Candidate coverage:** observations with at least one generated candidate.
+- **Classifier route continuity:** adjacent candidate-bearing observations whose top-scored arcs are the same arc or directly connected in the directed graph.
+- **HMM route continuity:** the same calculation for the decoded sequence.
+- **Route distance:** sum of distinct consecutive selected arcs; disconnected route windows remain separate.
 
-### 7.1 Trip Upload
+Continuity excludes non-positive time intervals and gaps above the decoder's configured reset threshold. These are inference diagnostics, not ground-truth accuracy metrics.
 
-After a successful upload, the frontend displays:
-- Trip ID
-- Upload status
-- Success or error message
+## Errors
 
-### 7.2 Processing Status
+| Status | Meaning |
+|---:|---|
+| 404 | Unknown trip, no cached result, or map not yet generated |
+| 413 | Uploaded file exceeds the size limit |
+| 422 | Invalid trip ID, malformed files, or invalid graph/data |
+| 503 | Model artifacts unavailable or incompatible |
 
-While route reconstruction is running, the frontend displays:
-- Processing indicator
-- Current trip ID
-- Processing status
+## CORS and deployment
 
-### 7.3 Reconstructed Route
-
-After successful processing, the frontend should receive enough information to display:
-
-- Original GPS coordinates
-- Reconstructed road-route geometry
-- Route distance, if available
-- Processing time
-- Prediction status
-
-**Proposed response structure:**
-
-{
-  "trip_id": "trip_001",
-  "status": "completed",
-  "original_gps": [
-    {"lat": 12.9716, "lon": 77.5946}
-  ],
-  "reconstructed_route": [
-    {"lat": 12.9720, "lon": 77.5950}
-  ],
-  "metrics": {
-    "route_distance_m": null,
-    "processing_time_seconds": 0.0
-  }
-}
-
-The actual geometry and metric fields must be finalized after integration with the data-processing and HMM modules.
-
-## 8. Frontend Features
-
-The React dashboard is planned to include:
-
-1. Trip file upload.
-2. Upload and processing status.
-3. Interactive map using Leaflet.
-4. Original GPS trajectory visualization.
-5. Reconstructed route visualization.
-6. Route result and metric summary.
-7. Previous trip history.
-
-## 9. Error Handling
-
-The backend should return meaningful error responses for:
-
-- Missing required files.
-- Unsupported file formats.
-- Invalid trip data.
-- Unknown trip IDs.
-- Prediction or reconstruction failures.
-- Internal server errors.
-
-The frontend should display understandable error messages rather than raw backend tracebacks.
+Default CORS permits localhost frontends and private IPv4 origins. Use `PATHSNAP_CORS_ORIGINS` to restrict origins. For LAN deployment, bind Uvicorn to `0.0.0.0` and set frontend `VITE_API_BASE_URL` to the backend laptop's LAN IP; see the two-laptop instructions in `README.md`.

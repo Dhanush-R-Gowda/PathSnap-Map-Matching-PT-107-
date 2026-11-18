@@ -92,11 +92,11 @@ Metrics: Top-1 Accuracy 0.8205195212460148; candidate Macro F1 0.879169922774052
 
 ## Saved artifacts
 
-- `best_model`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/best_model.pkl`
-- `preprocessing_pipeline`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/preprocessing_pipeline.pkl`
-- `feature_schema`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/feature_schema.json`
-- `model_metadata`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/model_metadata.json`
-- `best_hyperparameters`: `/Users/Mikey/GitHub/PathSnap-Map-Matching-PT-107-/artifacts/best_hyperparameters.json`
+- `best_model`: `artifacts/best_model.pkl`
+- `preprocessing_pipeline`: `artifacts/preprocessing_pipeline.pkl`
+- `feature_schema`: `artifacts/feature_schema.json`
+- `model_metadata`: `artifacts/model_metadata.json`
+- `best_hyperparameters`: `artifacts/best_hyperparameters.json`
 
 ## Limitations
 
