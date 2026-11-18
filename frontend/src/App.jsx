@@ -1,34 +1,107 @@
-
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
-import { MapContainer, TileLayer, Polyline, Marker, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import { api, getBackendUrl, setBackendUrl } from "./api";
 
-const trips = [
-  { id: "TRIP-001", date: "Today, 10:30 AM", status: "Completed", distance: "4.8 km" },
-  { id: "TRIP-002", date: "Today, 09:15 AM", status: "Completed", distance: "7.2 km" },
-  { id: "TRIP-003", date: "Yesterday, 04:20 PM", status: "Processing", distance: "--" },
-];
+function FitBounds({ points }) {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length) map.fitBounds(points, { padding: [24, 24] });
+  }, [points, map]);
+  return null;
+}
+
+const km = (m) => (m == null ? "--" : `${(m / 1000).toFixed(2)} km`);
 
 function App() {
-  const [file, setFile] = useState(null);
-  const [active, setActive] = useState("Dashboard");
-  const [uploaded, setUploaded] = useState(false);
+  const [backend, setBackend] = useState(getBackendUrl());
+  const [online, setOnline] = useState(null);
+  const [files, setFiles] = useState({});
+  const [samples, setSamples] = useState({});
+  const [sample, setSample] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [showGps, setShowGps] = useState(true);
+  const [showArcs, setShowArcs] = useState(false);
 
-  const navigation = [
-    ["▦", "Dashboard"],
-    ["↑", "Upload Trip"],
-    ["⌖", "Route Map"],
-    ["◷", "Trip History"],
-  ];
+  const refresh = useCallback(async () => {
+    try {
+      const h = await api.health(backend);
+      setOnline(h.model_loaded);
+      setError((e) => (e.startsWith("Cannot reach") ? "" : e));
+      setSamples(await api.samples(backend));
+      setHistory(await api.trips(backend));
+    } catch (e) {
+      setOnline(false);
+      setError(e.message);
+    }
+  }, [backend]);
 
-  function handleUpload(event) {
-    const selected = event.target.files[0];
-    if (selected) {
-      setFile(selected);
-      setUploaded(false);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  function saveBackend(e) {
+    e.preventDefault();
+    setBackendUrl(backend);
+    refresh();
+  }
+
+  function pick(ext, file) {
+    setFiles((f) => ({ ...f, [ext]: file }));
+  }
+
+  // Select all three files at once; they are assigned by extension.
+  function pickMany(list) {
+    for (const f of Array.from(list)) {
+      const ext = f.name.split(".").pop().toLowerCase();
+      if (["track", "nodes", "arcs"].includes(ext)) pick(ext, f);
     }
   }
+
+  async function run(prepare) {
+    setBusy(true);
+    setError("");
+    setResult(null);
+    try {
+      const { trip_id } = await prepare();
+      await api.predict(backend, trip_id);
+      setResult(await api.results(backend, trip_id));
+      setHistory(await api.trips(backend));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const runUpload = () => run(() => api.upload(backend, files));
+  const runSample = () => {
+    const [part, id] = sample.split("/");
+    return run(() => api.loadSample(backend, part, id));
+  };
+  async function openTrip(id) {
+    setBusy(true);
+    setError("");
+    try {
+      setResult(await api.results(backend, id));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const gps = useMemo(() => (result ? result.original_gps.map((p) => [p.lat, p.lon]) : []), [result]);
+  const segments = useMemo(
+    () => (result ? result.route_segments.map((s) => s.map((p) => [p.lat, p.lon])) : []),
+    [result]
+  );
+  const allFiles = ["track", "nodes", "arcs"].every((e) => files[e]);
+  const m = result?.metrics;
 
   return (
     <div className="app">
@@ -40,236 +113,140 @@ function App() {
             <span>MAP MATCHING SYSTEM</span>
           </div>
         </div>
-
-        <p className="nav-heading">WORKSPACE</p>
-        <nav>
-          {navigation.map(([icon, name]) => (
-            <button
-              key={name}
-              className={`nav-item ${active === name ? "active" : ""}`}
-              onClick={() => setActive(name)}
-            >
-              <span>{icon}</span>{name}
-            </button>
-          ))}
-        </nav>
-
+        <p className="nav-heading">BACKEND</p>
+        <form onSubmit={saveBackend} className="backend-form">
+          <input value={backend} onChange={(e) => setBackend(e.target.value)} aria-label="Backend URL" />
+          <button className="text-button" type="submit">Connect</button>
+        </form>
         <div className="sidebar-bottom">
           <div className="system-status">
-            <span className="status-dot"></span>
-            System Online
+            <span className="status-dot" style={{ background: online ? "#159b68" : "#d33" }}></span>
+            {online === null ? "Checking…" : online ? "Backend online" : "Backend offline"}
           </div>
-          <p>PathSnap v1.0</p>
-          <p>Distributed Map Matching</p>
+          <p>ML probabilities + HMM/Viterbi</p>
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
-          <div>
-            <span className="breadcrumb">Workspace / </span>
-            <strong>{active}</strong>
-          </div>
-          <div className="profile">
-            <span className="profile-avatar">B</span>
-            <span>Team Member</span>
-          </div>
+          <div><span className="breadcrumb">Evaluator / </span><strong>Route Reconstruction</strong></div>
         </header>
 
         <div className="content">
           <section className="welcome">
             <div>
               <p className="eyebrow">MAP MATCHING & ROUTE RECONSTRUCTION</p>
-              <h1>Welcome to PathSnap</h1>
-              <p className="subtitle">
-                Transform noisy GPS trajectories into accurate road routes.
-              </p>
+              <h1>Reconstruct a vehicle route</h1>
+              <p className="subtitle">Provide a GPS track and its road network; no ground-truth route is needed.</p>
             </div>
-            <div className="date-label">● Project Dashboard</div>
           </section>
 
-          <section className="stats">
-            <div className="stat-card">
-              <span className="stat-icon blue">⌖</span>
-              <p>Total Trips</p>
-              <h2>03</h2>
-              <small>Uploaded trips</small>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon green">✓</span>
-              <p>Completed</p>
-              <h2>02</h2>
-              <small>Successfully processed</small>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon orange">◷</span>
-              <p>Processing</p>
-              <h2>01</h2>
-              <small>Awaiting reconstruction</small>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon purple">↗</span>
-              <p>Road Distance</p>
-              <h2>12 km</h2>
-              <small>Sample data</small>
-            </div>
-          </section>
+          {error && <p role="alert" className="error-message">⚠ {error}</p>}
+
+          {m && (
+            <section className="stats">
+              <div className="stat-card"><p>GPS observations</p><h2>{m.observations}</h2><small>{m.matched_observations} matched</small></div>
+              <div className="stat-card"><p>Route distance</p><h2>{km(m.route_distance_m)}</h2><small>{m.route_arcs} road segments</small></div>
+              <div className="stat-card"><p>Route continuity</p><h2>{(m.route_continuity * 100).toFixed(1)}%</h2><small>{m.chain_breaks} chain breaks</small></div>
+              <div className="stat-card"><p>Processing time</p><h2>{m.processing_time_seconds.toFixed(1)} s</h2><small>{m.mean_candidates_per_obs.toFixed(1)} candidates / obs</small></div>
+            </section>
+          )}
 
           <section className="workspace-grid">
             <div className="panel upload-panel">
               <div className="panel-heading">
-                <div>
-                  <h3>Upload Trip Data</h3>
-                  <p>Import your GPS trajectory and road network files.</p>
-                </div>
-                <span className="heading-icon">↑</span>
+                <div><h3>Trip input</h3><p>Upload files or pick a trip stored on the backend.</p></div>
               </div>
 
-              <label className="upload-zone">
-                <span className="upload-symbol">⇧</span>
-                <strong>Choose a trip file</strong>
-                <span>Click to browse your computer</span>
-                <small>Supported: .track, .nodes, .arcs</small>
-                <input
-                  type="file"
-                  accept=".track,.nodes,.arcs"
-                  multiple
-                  onChange={handleUpload}
-                />
+              <label className="file-row">
+                <span>all 3</span>
+                <input type="file" multiple accept=".track,.nodes,.arcs" onChange={(e) => pickMany(e.target.files)} />
               </label>
-
-              <div className="file-info">
-                {file ? (
-                  <>
-                    <span>📄 {file.name}</span>
-                    <button onClick={() => { setFile(null); setUploaded(false); }}>
-                      Remove
-                    </button>
-                  </>
-                ) : (
-                  <span>No file selected</span>
-                )}
-              </div>
-
-              <button
-                className="primary-button"
-                disabled={!file}
-                onClick={() => setUploaded(true)}
-              >
-                Upload Trip Data →
+              {["track", "nodes", "arcs"].map((ext) => (
+                <label key={ext} className="file-row">
+                  <span>.{ext}</span>
+                  <em>{files[ext]?.name || "not selected"}</em>
+                  <input type="file" hidden accept={`.${ext}`} onChange={(e) => pick(ext, e.target.files[0])} />
+                </label>
+              ))}
+              <button className="primary-button" disabled={!allFiles || busy} onClick={runUpload}>
+                {busy ? "Reconstructing…" : "Upload & reconstruct →"}
               </button>
 
-              {uploaded && (
-                <p className="success-message">
-                  File selected successfully. Backend upload will be connected next.
-                </p>
-              )}
-
-              <p className="upload-note">
-                Upload the required trip files together when the backend is connected.
-                Ground-truth .route files are not needed for evaluator inference.
-              </p>
+              <p className="upload-note">— or choose a sample trip —</p>
+              <select value={sample} onChange={(e) => setSample(e.target.value)} aria-label="Sample trip">
+                <option value="">Select a trip…</option>
+                {Object.entries(samples).map(([part, ids]) => (
+                  <optgroup key={part} label={part}>
+                    {ids.map((id) => <option key={id} value={`${part}/${id}`}>{id}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <button className="primary-button" disabled={!sample || busy} onClick={runSample}>
+                {busy ? "Reconstructing…" : "Reconstruct sample →"}
+              </button>
+              <p className="upload-note">Ground-truth .route files are never required or exposed.</p>
             </div>
 
             <div className="panel map-panel">
               <div className="panel-heading">
-                <div>
-                  <h3>Route Visualization</h3>
-                  <p>Preview of original and reconstructed trajectories</p>
-                </div>
-                <span className="map-label">DEMO MAP</span>
+                <div><h3>Route visualisation</h3><p>Noisy GPS (blue) and reconstructed route (green)</p></div>
+                <span className="map-label">
+                  <label><input type="checkbox" checked={showGps} onChange={(e) => setShowGps(e.target.checked)} /> GPS</label>{" "}
+                  <label><input type="checkbox" checked={showArcs} onChange={(e) => setShowArcs(e.target.checked)} /> matched arcs</label>
+                </span>
               </div>
-
-              
-<div className="map">
-  <MapContainer
-    center={[12.9716, 77.5946]}
-    zoom={14}
-    scrollWheelZoom={true}
-    style={{ height: "100%", width: "100%" }}
-  >
-    <TileLayer
-      attribution='&copy; OpenStreetMap contributors'
-      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-    />
-
-    <Polyline
-      positions={[
-        [12.9716, 77.5946],
-        [12.9730, 77.5970],
-        [12.9750, 77.5990],
-        [12.9780, 77.6010],
-      ]}
-      pathOptions={{ color: "#3478f6", weight: 5, dashArray: "8 8" }}
-    />
-
-    <Polyline
-      positions={[
-        [12.9716, 77.5946],
-        [12.9725, 77.5960],
-        [12.9755, 77.5980],
-        [12.9780, 77.6010],
-      ]}
-      pathOptions={{ color: "#159b68", weight: 5 }}
-    />
-
-    <Marker position={[12.9716, 77.5946]}>
-      <Popup>Start point</Popup>
-    </Marker>
-
-    <Marker position={[12.9780, 77.6010]}>
-      <Popup>End point</Popup>
-    </Marker>
-  </MapContainer>
-</div>
-
+              <div className="map">
+                {busy && <div className="map-loading">Processing trip…</div>}
+                <MapContainer center={[12.97, 77.59]} zoom={12} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
+                  <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                  {gps.length > 0 && <FitBounds points={gps} />}
+                  {showGps && gps.filter((_, i) => i % Math.max(1, Math.floor(gps.length / 800)) === 0).map((p, i) => (
+                    <CircleMarker key={i} center={p} radius={2} pathOptions={{ color: "#3478f6", weight: 1 }} />
+                  ))}
+                  {showArcs && result?.matched_arcs.map((a) => (
+                    <Polyline key={a.obs_index} positions={a.polyline.map((p) => [p.lat, p.lon])} pathOptions={{ color: "#e08a00", weight: 3 }} />
+                  ))}
+                  {segments.map((s, i) => (
+                    <Polyline key={i} positions={s} pathOptions={{ color: "#159b68", weight: 5 }} />
+                  ))}
+                  {gps.length > 0 && (
+                    <>
+                      <CircleMarker center={gps[0]} radius={7} pathOptions={{ color: "#159b68", fillOpacity: 1 }}><Popup>Start</Popup></CircleMarker>
+                      <CircleMarker center={gps[gps.length - 1]} radius={7} pathOptions={{ color: "#d33", fillOpacity: 1 }}><Popup>End</Popup></CircleMarker>
+                    </>
+                  )}
+                </MapContainer>
+              </div>
               <div className="map-footer">
-                <span>Map preview uses sample data</span>
-                <span>Interactive map integration coming next</span>
+                <span>{result ? `Trip ${result.trip_id}` : "No trip reconstructed yet"}</span>
+                <span>{m ? `${m.unmatched_observations} observations without candidates` : ""}</span>
               </div>
             </div>
           </section>
 
           <section className="panel history-panel">
             <div className="panel-heading">
-              <div>
-                <h3>Recent Trips</h3>
-                <p>Your recently uploaded trajectories</p>
-              </div>
-              <button className="text-button" onClick={() => setActive("Trip History")}>
-                View all →
-              </button>
+              <div><h3>Trips on backend</h3><p>Click a processed trip to reopen it</p></div>
             </div>
-
             <div className="table-wrap">
               <table>
-                <thead>
-                  <tr>
-                    <th>TRIP ID</th>
-                    <th>DATE</th>
-                    <th>STATUS</th>
-                    <th>DISTANCE</th>
-                  </tr>
-                </thead>
+                <thead><tr><th>TRIP ID</th><th>OBSERVATIONS</th><th>STATUS</th><th>DISTANCE</th></tr></thead>
                 <tbody>
-                  {trips.map((trip) => (
-                    <tr key={trip.id}>
-                      <td><strong>{trip.id}</strong></td>
-                      <td>{trip.date}</td>
-                      <td>
-                        <span className={`badge ${trip.status === "Completed" ? "completed" : "processing"}`}>
-                          {trip.status}
-                        </span>
-                      </td>
-                      <td>{trip.distance}</td>
+                  {history.length === 0 && <tr><td colSpan="4">No trips yet</td></tr>}
+                  {history.map((t) => (
+                    <tr key={t.trip_id} onClick={() => t.status === "completed" && openTrip(t.trip_id)} style={{ cursor: "pointer" }}>
+                      <td><strong>{t.trip_id}</strong></td>
+                      <td>{t.observations}</td>
+                      <td><span className={`badge ${t.status === "completed" ? "completed" : "processing"}`}>{t.status}</span></td>
+                      <td>{km(t.route_distance_m)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </section>
-
-          <footer>© 2026 PathSnap · Distributed Map Matching & Route Reconstruction</footer>
+          <footer>PathSnap · Distributed Map Matching & Route Reconstruction</footer>
         </div>
       </main>
     </div>
