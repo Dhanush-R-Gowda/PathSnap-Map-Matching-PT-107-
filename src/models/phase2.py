@@ -990,5 +990,3 @@ def per_trip_metric_records(
         mask = frame[TRIP_COLUMN].astype(str).eq(trip_id).to_numpy()
         rows.append({"trip_id": trip_id, **evaluate_predictions(frame.loc[mask], np.asarray(probabilities)[mask], raw_context, [trip_id])})
     return rows
-
-\n
